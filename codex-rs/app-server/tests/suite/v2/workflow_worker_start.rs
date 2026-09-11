@@ -1,5 +1,6 @@
 use anyhow::Result;
 use app_test_support::TestAppServer;
+use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::WorkflowAuthorityCaptureResponse;
 use codex_app_server_protocol::WorkflowWorkerStartResponse;
@@ -16,6 +17,17 @@ async fn request<T: serde::de::DeserializeOwned>(
 ) -> Result<T> {
     let id = server.send_request(method, Some(params)).await?;
     server.read_response(id).await
+}
+
+async fn rejected_start(server: &mut TestAppServer, params: serde_json::Value) -> Result<String> {
+    let id = server
+        .send_request("workflow/worker/start", Some(params))
+        .await?;
+    let response = server
+        .read_stream_until_error_message(RequestId::Integer(id))
+        .await?;
+    assert_eq!(response.error.code, -32600);
+    Ok(response.error.message)
 }
 
 #[tokio::test]
@@ -73,21 +85,18 @@ async fn worker_start_attaches_requester_before_submitting_first_turn() -> Resul
         }),
     )
     .await?;
-    let started: WorkflowWorkerStartResponse = request(
-        &mut server,
-        "workflow/worker/start",
-        json!({
-            "runId":"run-1","workerId":"worker-1","parentThreadId":parent.id,
-            "authorityRef":authority.authority_ref,"authorityGeneration":workspace.authority_generation,
-            "authorityDigest":authority.authority_digest,"prompt":"finish the worker",
-            "model":"gpt-5.6-luna","effort":ReasoningEffort::Low,
-            "modelExplicit":false,"effortExplicit":false,"agentType":"general-purpose",
-            "roleDigest":workspace.role_digest,"readOnly":false,
-            "workspace":{"workspaceId":workspace.workspace_id,"cwd":workspace.cwd,"isolated":workspace.isolated,"baseCommit":workspace.base_commit},
-            "schema":null,"resumeThreadId":null
-        }),
-    )
-    .await?;
+    let start_params = json!({
+        "runId":"run-1","workerId":"worker-1","parentThreadId":parent.id,
+        "authorityRef":authority.authority_ref,"authorityGeneration":workspace.authority_generation,
+        "authorityDigest":authority.authority_digest,"prompt":"finish the worker",
+        "model":"gpt-5.6-luna","effort":ReasoningEffort::Low,
+        "modelExplicit":false,"effortExplicit":false,"agentType":"general-purpose",
+        "roleDigest":workspace.role_digest,"readOnly":false,
+        "workspace":{"workspaceId":workspace.workspace_id,"cwd":workspace.cwd,"isolated":workspace.isolated,"baseCommit":workspace.base_commit},
+        "schema":null,"resumeThreadId":null
+    });
+    let started: WorkflowWorkerStartResponse =
+        request(&mut server, "workflow/worker/start", start_params.clone()).await?;
 
     assert!(!started.thread_id.is_empty());
     let completed = tokio::time::timeout(
@@ -100,5 +109,75 @@ async fn worker_start_attaches_requester_before_submitting_first_turn() -> Resul
     assert_eq!(completed["turn"]["id"], started.turn_id);
     assert_eq!(completed["turn"]["status"], "completed");
     assert_eq!(worker_response.requests().len(), 1);
+
+    let mut stale = start_params.clone();
+    stale["authorityDigest"] = json!("stale-authority");
+    assert!(
+        rejected_start(&mut server, stale)
+            .await?
+            .contains("authority")
+    );
+    let mut foreign = start_params.clone();
+    foreign["workspace"]["cwd"] = json!(codex_home.path());
+    assert!(!rejected_start(&mut server, foreign).await?.is_empty());
+
+    // Keep the replacement active long enough to verify concurrent duplicates are rejected.
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path_regex(".*/responses$"))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(responses::sse(vec![
+                    responses::ev_response_created("replacement-response"),
+                    responses::ev_assistant_message("replacement-message", "replacement complete"),
+                    responses::ev_completed("replacement-response"),
+                ]))
+                .set_delay(std::time::Duration::from_secs(2)),
+        )
+        .with_priority(1)
+        .expect(1)
+        .up_to_n_times(1)
+        .mount(&model_server)
+        .await;
+    let replacement: WorkflowWorkerStartResponse =
+        request(&mut server, "workflow/worker/start", start_params.clone()).await?;
+    assert_ne!(replacement.thread_id, started.thread_id);
+    assert_eq!(
+        rejected_start(&mut server, start_params.clone()).await?,
+        "workflow worker launch is already owned"
+    );
+    let completed = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        server.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    let completed = completed.params.expect("replacement completion parameters");
+    assert_eq!(completed["threadId"], replacement.thread_id);
+    assert_eq!(completed["turn"]["status"], "completed");
+
+    responses::mount_sse_once(
+        &model_server,
+        responses::sse(vec![
+            responses::ev_response_created("resumed-response"),
+            responses::ev_assistant_message("resumed-message", "resumed complete"),
+            responses::ev_completed("resumed-response"),
+        ]),
+    )
+    .await;
+    let mut resume_params = start_params;
+    resume_params["resumeThreadId"] = json!(replacement.thread_id);
+    let resumed: WorkflowWorkerStartResponse =
+        request(&mut server, "workflow/worker/start", resume_params).await?;
+    assert_eq!(resumed.thread_id, replacement.thread_id);
+    assert_ne!(resumed.turn_id, replacement.turn_id);
+    let completed = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        server.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    let completed = completed.params.expect("resumed completion parameters");
+    assert_eq!(completed["threadId"], resumed.thread_id);
+    assert_eq!(completed["turn"]["id"], resumed.turn_id);
+    assert_eq!(completed["turn"]["status"], "completed");
     Ok(())
 }
