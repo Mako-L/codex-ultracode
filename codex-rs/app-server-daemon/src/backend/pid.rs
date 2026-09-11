@@ -32,6 +32,8 @@ pub(crate) struct PidBackend {
     pid_file: PathBuf,
     lock_file: PathBuf,
     command_kind: PidCommandKind,
+    socket_path: Option<PathBuf>,
+    codex_home: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,6 +86,8 @@ impl PidBackend {
             command_kind: PidCommandKind::AppServer {
                 remote_control_enabled,
             },
+            socket_path: None,
+            codex_home: None,
         }
     }
 
@@ -94,7 +98,19 @@ impl PidBackend {
             pid_file,
             lock_file,
             command_kind: PidCommandKind::UpdateLoop,
+            socket_path: None,
+            codex_home: None,
         }
+    }
+
+    pub(crate) fn with_socket_path(mut self, socket_path: PathBuf) -> Self {
+        self.socket_path = Some(socket_path);
+        self
+    }
+
+    pub(crate) fn with_codex_home(mut self, codex_home: PathBuf) -> Self {
+        self.codex_home = Some(codex_home);
+        self
     }
 
     pub(crate) async fn is_starting_or_running(&self) -> Result<bool> {
@@ -168,6 +184,9 @@ impl PidBackend {
             .stderr(Stdio::from(stderr_log.into_std().await));
         if let Some((key, value)) = self.command_env() {
             command.env(key, value);
+        }
+        if let Some(codex_home) = &self.codex_home {
+            command.env("CODEX_HOME", codex_home);
         }
 
         #[cfg(unix)]
@@ -410,8 +429,8 @@ impl PidBackend {
     }
 
     #[cfg(unix)]
-    fn command_args(&self) -> Vec<&'static str> {
-        match self.command_kind {
+    fn command_args(&self) -> Vec<String> {
+        let mut args: Vec<String> = match self.command_kind {
             PidCommandKind::AppServer {
                 remote_control_enabled: true,
             } => vec!["app-server", "--remote-control", "--listen", "unix://"],
@@ -420,6 +439,16 @@ impl PidBackend {
             } => vec!["app-server", "--listen", "unix://"],
             PidCommandKind::UpdateLoop => vec!["app-server", "daemon", "pid-update-loop"],
         }
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+        if matches!(self.command_kind, PidCommandKind::AppServer { .. })
+            && let Some(socket_path) = &self.socket_path
+        {
+            *args.last_mut().expect("app-server listen argument") =
+                format!("unix://{}", socket_path.display());
+        }
+        args
     }
 
     #[cfg(unix)]

@@ -1,0 +1,48 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+   Dynamic workflows
+   5 completed
+
+   ❯ ✘ ui-freeze  2 agents · 80.4k tok · 17s
+     ✔ ui-pause  1 agent · 40.2k tok · 11s
+     ✔ ui-controls  1 agent · 40.2k tok · 3m 17s
+     ✔ ui-reference  3 agents · 121.4k tok · 32s
+     ✔ ui-reference  3 agents · 9s
+
+   ↑/↓ to select · Enter to view · s to save · Esc to close

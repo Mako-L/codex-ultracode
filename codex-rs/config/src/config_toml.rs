@@ -49,6 +49,8 @@ use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::config_types::WorkflowSizeGuideline;
+use codex_protocol::config_types::WorktreeBaseRef;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::NetworkSandboxPolicy;
@@ -147,6 +149,13 @@ pub struct OrchestratorToml {
 #[schemars(deny_unknown_fields)]
 pub struct OrchestratorFeatureToml {
     pub enabled: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct WorkflowWorktreeToml {
+    #[serde(default)]
+    pub base_ref: WorktreeBaseRef,
 }
 
 /// Base config deserialized from ~/.codex/config.toml.
@@ -358,6 +367,16 @@ pub struct ConfigToml {
     pub show_raw_agent_reasoning: Option<bool>,
 
     pub model_reasoning_effort: Option<ReasoningEffort>,
+    /// Enables Ultracode workflow orchestration globally.
+    pub ultracode: Option<bool>,
+    /// Codex-adapted key for the `/config` “Ultracode keyword trigger” toggle.
+    pub ultracode_keyword_trigger: Option<bool>,
+    /// Disables every workflow surface, including saved commands and keyword activation.
+    pub disable_workflows: Option<bool>,
+    /// Advisory target for the number of agents in dynamically authored workflows.
+    pub workflow_size_guideline: Option<WorkflowSizeGuideline>,
+    /// Starting reference for isolated workflow worktrees; defaults to fresh origin HEAD.
+    pub worktree: Option<WorkflowWorktreeToml>,
     pub plan_mode_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
@@ -977,6 +996,35 @@ mod tests {
 
     const WORKSPACE_ID_A: &str = "123e4567-e89b-42d3-a456-426614174000";
     const WORKSPACE_ID_B: &str = "123e4567-e89b-42d3-a456-426614174001";
+
+    #[test]
+    fn workflow_worktree_base_ref_defaults_to_fresh_and_accepts_head() {
+        let default: ConfigToml = toml::from_str("[worktree]").unwrap();
+        assert_eq!(default.worktree.unwrap().base_ref, WorktreeBaseRef::Fresh);
+        let head: ConfigToml = toml::from_str("[worktree]\nbase_ref = 'head'").unwrap();
+        assert_eq!(head.worktree.unwrap().base_ref, WorktreeBaseRef::Head);
+        assert!(toml::from_str::<ConfigToml>("[worktree]\nbase_ref = 'main'").is_err());
+    }
+
+    #[test]
+    fn ultracode_boolean_is_a_recognized_setting() {
+        let enabled: ConfigToml = toml::from_str("ultracode = true").unwrap();
+        let disabled: ConfigToml = toml::from_str("ultracode = false").unwrap();
+        let absent: ConfigToml = toml::from_str("").unwrap();
+        assert_eq!(enabled.ultracode, Some(true));
+        assert_eq!(disabled.ultracode, Some(false));
+        assert_eq!(absent.ultracode, None);
+        let controls: ConfigToml =
+            toml::from_str("ultracode_keyword_trigger = false\ndisable_workflows = true").unwrap();
+        assert_eq!(controls.ultracode_keyword_trigger, Some(false));
+        assert_eq!(controls.disable_workflows, Some(true));
+        let sizes: ConfigToml = toml::from_str("workflow_size_guideline = 'small'").unwrap();
+        assert_eq!(
+            sizes.workflow_size_guideline,
+            Some(WorkflowSizeGuideline::Small)
+        );
+        assert!(toml::from_str::<ConfigToml>("workflow_size_guideline = 'huge'").is_err());
+    }
 
     #[test]
     fn forced_chatgpt_workspace_id_accepts_single_string() {

@@ -227,7 +227,7 @@ pub(crate) fn tool_specs() -> Vec<DynamicToolSpec> {
         ),
     ];
 
-    vec![DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
+    let mut specs = vec![DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
         name: NAMESPACE.to_string(),
         description: "Manage Codex tasks available through the connected app server.".to_string(),
         tools: definitions
@@ -246,7 +246,22 @@ pub(crate) fn tool_specs() -> Vec<DynamicToolSpec> {
                 })
             })
             .collect(),
-    })]
+    })];
+    specs.push(DynamicToolSpec::Function(DynamicToolFunctionSpec {
+        name: "workflow".into(),
+        description: "Launch or resume a user-requested Ultracode workflow after native validation and consent. Returns immediately with a workflow run ID, not a worker thread ID. Completion arrives automatically as a typed workflow.completion message; acknowledge launch and finish the current turn. This tool does not accept polling or wait actions.".into(),
+        input_schema: json!({
+            "type":"object","additionalProperties":false,
+            "properties":{
+                "script":{"type":"string","minLength":1},"name":{"type":"string","minLength":1},
+                "scriptPath":{"type":"string","minLength":1},"args":{},"resumeFromRunId":{"type":"string","minLength":1},
+                "title":{"type":"string"},"description":{"type":"string"}
+            },
+            "anyOf":[{"required":["script"]},{"required":["name"]},{"required":["scriptPath"]},{"required":["resumeFromRunId"]}]
+        }),
+        defer_loading: false,
+    }));
+    specs
 }
 
 pub(crate) fn non_delegation_tool_specs() -> Vec<DynamicToolSpec> {
@@ -264,6 +279,33 @@ pub(crate) fn non_delegation_tool_specs() -> Vec<DynamicToolSpec> {
                 });
                 Some(DynamicToolSpec::Namespace(namespace))
             }
+        })
+        .collect()
+}
+
+pub(crate) fn workflow_tool_specs() -> Vec<DynamicToolSpec> {
+    tool_specs()
+        .into_iter()
+        .filter(|spec| {
+            matches!(spec, DynamicToolSpec::Function(function) if function.name == "workflow")
+        })
+        .collect()
+}
+
+pub(crate) fn task_tool_specs() -> Vec<DynamicToolSpec> {
+    tool_specs()
+        .into_iter()
+        .filter(|spec| {
+            !matches!(spec, DynamicToolSpec::Function(function) if function.name == "workflow")
+        })
+        .collect()
+}
+
+pub(crate) fn non_delegation_task_tool_specs() -> Vec<DynamicToolSpec> {
+    non_delegation_tool_specs()
+        .into_iter()
+        .filter(|spec| {
+            !matches!(spec, DynamicToolSpec::Function(function) if function.name == "workflow")
         })
         .collect()
 }
@@ -299,7 +341,7 @@ pub(crate) async fn execute(
     }
 }
 
-fn success_response(mut value: Value) -> Result<DynamicToolCallResponse, String> {
+pub(crate) fn success_response(mut value: Value) -> Result<DynamicToolCallResponse, String> {
     let mut max_chars = MAX_RESPONSE_BYTES / 2;
     loop {
         let text = serde_json::to_string(&value).map_err(|error| error.to_string())?;

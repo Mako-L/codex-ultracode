@@ -5759,8 +5759,40 @@
         }
       ]
     },
+    "WorkflowSizeGuideline": {
+      "description": "Advisory target for the number of agents in a dynamically authored workflow.",
+      "enum": [
+        "unrestricted",
+        "small",
+        "medium",
+        "large"
+      ],
+      "type": "string"
+    },
+    "WorkflowWorktreeToml": {
+      "additionalProperties": false,
+      "properties": {
+        "base_ref": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/WorktreeBaseRef"
+            }
+          ],
+          "default": "fresh"
+        }
+      },
+      "type": "object"
+    },
     "WorkspaceRootsToml": {
       "type": "object"
+    },
+    "WorktreeBaseRef": {
+      "description": "Starting reference for isolated workflow worktrees.",
+      "enum": [
+        "fresh",
+        "head"
+      ],
+      "type": "string"
     }
   },
   "description": "Base config deserialized from ~/.codex/config.toml.",
@@ -5882,6 +5914,10 @@
     },
     "disable_paste_burst": {
       "description": "Legacy fallback for `tui.disable_paste_burst`. Prefer the setting under `[tui]`.",
+      "type": "boolean"
+    },
+    "disable_workflows": {
+      "description": "Disables every workflow surface, including saved commands and keyword activation.",
       "type": "boolean"
     },
     "experimental_compact_prompt_file": {
@@ -6817,6 +6853,14 @@
       ],
       "description": "Collection of settings that are specific to the TUI."
     },
+    "ultracode": {
+      "description": "Enables Ultracode workflow orchestration globally.",
+      "type": "boolean"
+    },
+    "ultracode_keyword_trigger": {
+      "description": "Codex-adapted key for the `/config` “Ultracode keyword trigger” toggle.",
+      "type": "boolean"
+    },
     "web_search": {
       "allOf": [
         {
@@ -6833,6 +6877,22 @@
       ],
       "default": null,
       "description": "Windows-specific configuration."
+    },
+    "workflow_size_guideline": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/WorkflowSizeGuideline"
+        }
+      ],
+      "description": "Advisory target for the number of agents in dynamically authored workflows."
+    },
+    "worktree": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/WorkflowWorktreeToml"
+        }
+      ],
+      "description": "Starting reference for isolated workflow worktrees; defaults to fresh origin HEAD."
     }
   },
   "title": "ConfigToml",

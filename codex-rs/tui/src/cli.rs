@@ -16,6 +16,14 @@ pub struct Cli {
     #[arg(long = "strict-config", default_value_t = false)]
     pub strict_config: bool,
 
+    /// Set session reasoning effort; `ultracode` enables workflow orchestration at xhigh.
+    #[arg(long, value_parser = ["low", "medium", "high", "xhigh", "max", "ultracode"])]
+    pub effort: Option<String>,
+
+    /// Internal: keep native workflow services alive through TUI detach/reconnect.
+    #[arg(long, hide = true, default_value_t = false)]
+    pub native_workflow_host: bool,
+
     // Internal controls set by the top-level `codex resume` subcommand.
     // These are not exposed as user flags on the base `codex` command.
     #[clap(skip)]
@@ -77,6 +85,24 @@ pub struct Cli {
 
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
+}
+
+impl Cli {
+    pub(crate) fn apply_effort_overrides(&mut self) {
+        let Some(effort) = self.effort.as_deref() else {
+            return;
+        };
+        let model_effort = match effort {
+            "ultracode" => "xhigh",
+            value => value,
+        };
+        self.config_overrides
+            .raw_overrides
+            .push(format!("model_reasoning_effort={model_effort:?}"));
+        self.config_overrides
+            .raw_overrides
+            .push(format!("ultracode={}", effort == "ultracode"));
+    }
 }
 
 impl std::ops::Deref for Cli {
@@ -141,4 +167,44 @@ fn mark_tui_args(cmd: clap::Command) -> clap::Command {
         arg.conflicts_with("approval_policy")
     })
     .mut_arg("auto_review", |arg| arg.conflicts_with("approval_policy"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ultracode_effort_is_separate_from_model_effort() {
+        let mut cli = Cli::try_parse_from(["codex", "--effort", "ultracode"]).unwrap();
+        cli.apply_effort_overrides();
+        assert!(
+            cli.config_overrides
+                .raw_overrides
+                .contains(&"model_reasoning_effort=\"xhigh\"".to_string())
+        );
+        assert!(
+            cli.config_overrides
+                .raw_overrides
+                .contains(&"ultracode=true".to_string())
+        );
+    }
+
+    #[test]
+    fn ordinary_and_max_effort_disable_workflow_mode() {
+        for (input, effective) in [("low", "low"), ("max", "max")] {
+            let mut cli = Cli::try_parse_from(["codex", "--effort", input]).unwrap();
+            cli.apply_effort_overrides();
+            assert!(
+                cli.config_overrides
+                    .raw_overrides
+                    .contains(&format!("model_reasoning_effort={effective:?}"))
+            );
+            assert!(
+                cli.config_overrides
+                    .raw_overrides
+                    .contains(&"ultracode=false".to_string())
+            );
+        }
+        assert!(Cli::try_parse_from(["codex", "--effort", "ultra"]).is_err());
+    }
 }

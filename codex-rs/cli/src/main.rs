@@ -1,3 +1,5 @@
+#[cfg(unix)]
+mod native_workflows;
 use clap::Args;
 use clap::CommandFactory;
 use clap::Parser;
@@ -102,7 +104,7 @@ use codex_terminal_detection::TerminalName;
 #[derive(Debug, Parser)]
 #[clap(
     author,
-    version,
+    version = concat!(env!("CARGO_PKG_VERSION"), "+ultracode.0.2.0"),
     // If a sub‑command is given, ignore requirements of the default args.
     subcommand_negates_reqs = true,
     // The executable is sometimes invoked via a platform‑specific name like
@@ -1047,6 +1049,16 @@ async fn cli_main(
     arg0_paths: Arg0DispatchPaths,
     remote_control_disabled: bool,
 ) -> anyhow::Result<()> {
+    #[cfg(unix)]
+    if std::env::args_os().nth(1).as_deref()
+        == Some(std::ffi::OsStr::new("--internal-workflow-supervisor"))
+    {
+        let home = std::env::args_os()
+            .nth(2)
+            .ok_or_else(|| anyhow::anyhow!("missing workflow supervisor home"))?;
+        codex_tui::run_workflow_supervisor(home.into()).await?;
+        return Ok(());
+    }
     let MultitoolCli {
         config_overrides: mut root_config_overrides,
         feature_toggles,
@@ -1155,7 +1167,21 @@ async fn cli_main(
                 &mut exec_cli.config_overrides,
                 root_config_overrides.clone(),
             );
-            codex_exec::run_main(exec_cli, arg0_paths.clone()).await?;
+            let native_workflows =
+                exec_cli.native_workflow_host || interactive.native_workflow_host;
+            if native_workflows {
+                #[cfg(unix)]
+                codex_exec::run_main_with_native_workflow_host(
+                    exec_cli,
+                    arg0_paths.clone(),
+                    native_workflows::connect,
+                )
+                .await?;
+                #[cfg(not(unix))]
+                anyhow::bail!("native workflow execution requires a Unix host");
+            } else {
+                codex_exec::run_main(exec_cli, arg0_paths.clone()).await?;
+            }
         }
         Some(Subcommand::Review(ReviewCommand {
             strict_config,

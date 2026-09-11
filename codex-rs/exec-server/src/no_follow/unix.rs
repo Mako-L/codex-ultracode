@@ -119,18 +119,22 @@ pub(super) async fn open_file(path: PathBuf) -> io::Result<tokio::fs::File> {
         .map_err(|error| io::Error::other(format!("filesystem task failed: {error}")))?
 }
 
-pub(super) async fn write_file(path: PathBuf, contents: Vec<u8>) -> io::Result<()> {
+pub(super) async fn write_file(
+    path: PathBuf,
+    contents: Vec<u8>,
+    create_new: bool,
+) -> io::Result<()> {
     tokio::task::spawn_blocking(move || {
         let (parent, leaf) = parent(&path)?;
         // Prevent FIFOs and devices from blocking during open before the
         // descriptor can be validated as a regular file below.
-        let file = openat(
-            &parent,
-            leaf,
-            OFlags::WRONLY | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
-            Mode::from_raw_mode(0o666),
-        )
-        .map_err(io::Error::from)?;
+        let mut flags =
+            OFlags::WRONLY | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+        if create_new {
+            flags |= OFlags::EXCL;
+        }
+        let file =
+            openat(&parent, leaf, flags, Mode::from_raw_mode(0o666)).map_err(io::Error::from)?;
         let mut file = std::fs::File::from(file);
         if !file.metadata()?.is_file() {
             return Err(io::Error::new(

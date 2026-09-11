@@ -517,6 +517,41 @@ client_request_definitions! {
         serialization: None,
         response: v2::ThreadStartResponse,
     },
+    WorkflowAuthorityCapture => "workflow/authority/capture" {
+        params: v2::WorkflowAuthorityCaptureParams,
+        serialization: thread_id(params.parent_thread_id),
+        response: v2::WorkflowAuthorityCaptureResponse,
+    },
+    WorkflowScriptRead => "workflow/script/read" {
+        params: v2::WorkflowScriptReadParams,
+        serialization: thread_id(params.parent_thread_id),
+        response: v2::WorkflowScriptReadResponse,
+    },
+    WorkflowSave => "workflow/save" {
+        params: v2::WorkflowSaveParams,
+        serialization: thread_id(params.parent_thread_id),
+        response: v2::WorkflowSaveResponse,
+    },
+    WorkflowCompletionInject => "workflow/completion/inject" {
+        params: v2::WorkflowCompletionInjectParams,
+        serialization: thread_id(params.parent_thread_id),
+        response: v2::WorkflowCompletionInjectResponse,
+    },
+    WorkflowWorkspacePrepare => "workflow/workspace/prepare" {
+        params: v2::WorkflowWorkspacePrepareParams,
+        serialization: None,
+        response: v2::WorkflowWorkspacePrepareResponse,
+    },
+    WorkflowWorkspaceRelease => "workflow/workspace/release" {
+        params: v2::WorkflowWorkspaceReleaseParams,
+        serialization: None,
+        response: v2::WorkflowWorkspaceReleaseResponse,
+    },
+    WorkflowWorkerStart => "workflow/worker/start" {
+        params: v2::WorkflowWorkerStartParams,
+        serialization: thread_id(params.parent_thread_id),
+        response: v2::WorkflowWorkerStartResponse,
+    },
     ThreadResume => "thread/resume" {
         params: v2::ThreadResumeParams,
         inspect_params: true,

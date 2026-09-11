@@ -194,6 +194,7 @@ impl FileSystemHandler {
                 bytes,
                 WriteFileOptions {
                     follow_symlinks: params.follow_symlinks.unwrap_or(true),
+                    create_new: params.create_new.unwrap_or(false),
                 },
                 params.sandbox.as_ref(),
             )
@@ -400,6 +401,7 @@ mod tests {
                     path: path.clone(),
                     follow_symlinks: None,
                     data_base64: STANDARD.encode("ok"),
+                    create_new: None,
                     sandbox: Some(sandbox_context(sandbox_policy.clone())),
                 })
                 .await

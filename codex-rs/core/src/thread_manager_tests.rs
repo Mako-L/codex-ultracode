@@ -186,6 +186,58 @@ async fn thread_id_generator_applies_to_roots_children_and_forks() {
     assert_eq!(report.completed.len(), 3);
 }
 
+#[tokio::test]
+async fn spawn_subagent_forks_active_paginated_parent_without_legacy_thread_read() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let mut root_options = StartThreadOptions::new(config.clone());
+    root_options.history_mode = Some(ThreadHistoryMode::Paginated);
+    let root = manager
+        .start_thread(root_options)
+        .await
+        .expect("start paginated root thread");
+    root.thread
+        .inject_response_items(vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "known parent context".to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        }])
+        .await
+        .expect("inject parent context");
+
+    let child = manager
+        .spawn_subagent(root.thread_id, StartThreadOptions::new(config))
+        .await
+        .expect("fork active paginated parent");
+
+    assert_eq!(
+        child.thread.config_snapshot().await.parent_thread_id,
+        Some(root.thread_id)
+    );
+    let child_history = child.thread.session.conversation_history_snapshot().await;
+    assert!(child_history.items().any(|item| matches!(
+        item,
+        ResponseItem::Message { content, .. }
+            if content.iter().any(|part| matches!(
+                part,
+                ContentItem::InputText { text } if text == "known parent context"
+            ))
+    )));
+}
+
 /// Resuming a thread preserves its stored ID instead of invoking the new manager's factory.
 #[tokio::test]
 async fn thread_id_generator_does_not_replace_resumed_thread_id() {

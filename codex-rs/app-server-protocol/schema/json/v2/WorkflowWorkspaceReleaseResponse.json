@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "eligible": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "eligible"
+  ],
+  "title": "WorkflowWorkspaceReleaseResponse",
+  "type": "object"
+}

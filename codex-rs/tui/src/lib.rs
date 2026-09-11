@@ -127,6 +127,10 @@ mod diff_model;
 mod diff_render;
 mod dynamic_tools;
 mod dynamic_tools_mcp;
+#[cfg(test)]
+mod dynamic_tools_mcp_workflow_tests;
+#[cfg(test)]
+mod dynamic_tools_workflow_tests;
 mod exec_cell;
 mod exec_command;
 mod external_agent_config_migration;
@@ -197,6 +201,17 @@ mod terminal_palette;
 mod terminal_probe;
 mod terminal_title;
 mod terminal_visualization_instructions;
+#[cfg(unix)]
+mod ultracode_host;
+mod ultracode_launch;
+#[cfg(unix)]
+pub use ultracode_host::run as run_workflow_supervisor;
+#[cfg(unix)]
+mod ultracode_headless;
+#[cfg(unix)]
+pub use ultracode_headless::HeadlessWorkflowController;
+#[cfg(unix)]
+pub use ultracode_headless::prepare as prepare_headless_workflow_host;
 mod text_formatting;
 mod theme_picker;
 mod thread_transcript;
@@ -205,8 +220,13 @@ mod tooltips;
 mod transcript_reflow;
 mod tui;
 mod ui_consts;
+pub(crate) mod ultracode_bridge;
+mod ultracode_keyword;
 mod unarchive_prompt;
 pub(crate) mod update_action;
+mod workflow_advisory;
+pub(crate) mod workflow_consent;
+pub(crate) mod workflow_view;
 pub use update_action::UpdateAction;
 #[cfg(not(debug_assertions))]
 pub use update_action::get_update_action;

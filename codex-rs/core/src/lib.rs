@@ -50,6 +50,7 @@ pub use codex_thread::GuardianRootSnapshot;
 pub use codex_thread::ThreadConfigSnapshot;
 pub use session::turn_context::TurnContext;
 mod agent;
+pub use agent::role::apply_role_to_config;
 mod agent_communication;
 mod attestation;
 mod codex_delegate;

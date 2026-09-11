@@ -755,6 +755,7 @@ impl McpServerElicitationOverlay {
             disable_paste_burst,
             ChatComposerConfig::plain_text(),
         );
+        composer.set_workflow_keyword_enabled(false);
         composer.set_keymap_bindings(&keymap);
         composer.set_footer_hint_override(Some(Vec::new()));
         let mut overlay = Self {
@@ -1274,6 +1275,7 @@ impl McpServerElicitationOverlay {
             InputResult::Submitted {
                 text,
                 text_elements,
+                ..
             }
             | InputResult::Queued {
                 text,

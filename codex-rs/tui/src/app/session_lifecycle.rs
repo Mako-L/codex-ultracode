@@ -928,12 +928,20 @@ impl App {
         if started.blocks_direct_input {
             self.mark_primary_thread_parent_owned(started.session.thread_id);
         }
+        let workflow_thread_id = started.session.thread_id.to_string();
         self.enqueue_primary_thread_session_with_presentation(
             started.session,
             started.turns,
             presentation,
         )
         .await?;
+        if !self.config.disable_workflows {
+            self.app_event_tx.send(AppEvent::Workflow(
+                crate::app_event::WorkflowEvent::LoadCatalog {
+                    thread_id: workflow_thread_id,
+                },
+            ));
+        }
         Ok(())
     }
 

@@ -15,6 +15,7 @@ impl ChatWidget {
         let existing_cursor = existing_draft.cursor;
         let existing_message = UserMessage {
             text: existing_draft.text,
+            workflow_keyword: existing_draft.workflow_keyword,
             text_elements: existing_draft.text_elements,
             local_images: existing_draft.local_images,
             remote_image_urls: existing_draft.remote_image_urls,
@@ -25,6 +26,7 @@ impl ChatWidget {
 
         let startup_message = UserMessage {
             text: draft.text,
+            workflow_keyword: draft.workflow_keyword,
             text_elements: draft.text_elements,
             local_images: draft.local_images,
             remote_image_urls: draft.remote_image_urls,
@@ -291,6 +293,7 @@ impl ChatWidget {
         let composer_pending_pastes = composer.pending_pastes;
         let existing_message = UserMessage {
             text: composer.text,
+            workflow_keyword: composer.workflow_keyword,
             text_elements: composer.text_elements,
             local_images: composer.local_images,
             remote_image_urls: composer.remote_image_urls,
@@ -374,6 +377,7 @@ impl ChatWidget {
         let pending_pastes = draft.pending_pastes;
         let draft_message = UserMessage {
             text: draft.text,
+            workflow_keyword: draft.workflow_keyword,
             text_elements: draft.text_elements,
             local_images: draft.local_images,
             remote_image_urls: draft.remote_image_urls,
@@ -395,6 +399,7 @@ impl ChatWidget {
     pub(super) fn restore_composer_state(&mut self, composer: ThreadComposerState) {
         let ThreadComposerState {
             text,
+            workflow_keyword,
             local_images,
             remote_image_urls,
             text_elements,
@@ -410,6 +415,7 @@ impl ChatWidget {
             mention_bindings,
         );
         self.bottom_pane.set_composer_pending_pastes(pending_pastes);
+        self.bottom_pane.restore_workflow_keyword(workflow_keyword);
     }
 
     fn composer_state_from_user_message(
@@ -418,6 +424,7 @@ impl ChatWidget {
     ) -> ThreadComposerState {
         let UserMessage {
             text,
+            workflow_keyword,
             local_images,
             remote_image_urls,
             text_elements,
@@ -425,6 +432,7 @@ impl ChatWidget {
         } = user_message;
         ThreadComposerState {
             text,
+            workflow_keyword,
             local_images,
             remote_image_urls,
             text_elements,
@@ -437,6 +445,7 @@ impl ChatWidget {
         let draft = self.bottom_pane.composer_draft_snapshot();
         let composer = ThreadComposerState {
             text: draft.text,
+            workflow_keyword: draft.workflow_keyword,
             text_elements: draft.text_elements,
             local_images: draft.local_images,
             remote_image_urls: draft.remote_image_urls,

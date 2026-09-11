@@ -48,7 +48,7 @@ struct AgentRoleOverrides {
 }
 
 /// Applies typed role overrides to the existing parent-derived configuration.
-pub(crate) async fn apply_role_to_config(
+pub async fn apply_role_to_config(
     config: &mut Config,
     role_name: Option<&str>,
 ) -> Result<(), String> {

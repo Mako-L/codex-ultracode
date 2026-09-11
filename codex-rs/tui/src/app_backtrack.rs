@@ -39,9 +39,13 @@ use crate::pager_overlay::Overlay;
 use crate::pager_overlay::TranscriptHistoryState;
 use crate::tui;
 use crate::tui::TuiEvent;
+use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::WorkflowAuthorityCaptureResponse;
+use codex_app_server_protocol::WorkflowSaveParams;
+use codex_app_server_protocol::WorkflowSaveResponse;
 use codex_protocol::ThreadId;
 use codex_protocol::models::local_image_label_text;
 use color_eyre::eyre::Result;
@@ -49,6 +53,7 @@ use color_eyre::eyre::bail;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use uuid::Uuid;
 
 const NO_PREVIOUS_MESSAGE_TO_EDIT: &str = "No previous message to edit.";
 pub(crate) const SIDE_EDIT_PREVIOUS_UNAVAILABLE_MESSAGE: &str =
@@ -93,6 +98,29 @@ impl App {
         app_server: &mut AppServerSession,
         event: TuiEvent,
     ) -> Result<bool> {
+        if let TuiEvent::Key(key) = event
+            && let Some(Overlay::Workflow(overlay)) = self.overlay.as_mut()
+        {
+            let action = overlay.handle_key(key);
+            let bridge = self
+                .chat_widget
+                .thread_id()
+                .and_then(|id| self.workflow_sessions.get(&id.to_string()))
+                .map(|session| session.bridge.clone());
+            if let Some(action) = action {
+                if action == crate::workflow_view::WorkflowAction::Close {
+                    self.close_transcript_overlay(tui);
+                } else if let Some(bridge) = bridge
+                    && let Err(error) =
+                        Box::pin(self.handle_workflow_action(tui, app_server, &bridge, action))
+                            .await
+                {
+                    self.chat_widget.add_error_message(error);
+                }
+            }
+            tui.frame_requester().schedule_frame();
+            return Ok(true);
+        }
         if let TuiEvent::Key(key_event) = &event
             && let Some(Overlay::Transcript(overlay)) = self.overlay.as_ref()
             && (overlay.should_load_older(*key_event)
@@ -166,6 +194,127 @@ impl App {
             self.overlay_forward_event(tui, event)?;
             Ok(true)
         }
+    }
+
+    async fn handle_workflow_action(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        bridge: &crate::ultracode_bridge::UltracodeBridge,
+        action: crate::workflow_view::WorkflowAction,
+    ) -> Result<(), String> {
+        use crate::workflow_view::WorkflowAction;
+        use serde_json::json;
+        use std::time::Duration;
+        let call = |method, params| bridge.request(method, params, Duration::from_secs(30));
+        match action {
+            WorkflowAction::InspectRun { run_id } => {
+                let run = call("inspectRun", json!({"runId":run_id}))
+                    .await
+                    .map_err(|e| e.to_string())?;
+                if let Some(Overlay::Workflow(overlay)) = self.overlay.as_mut() {
+                    overlay.update(json!({"runs":[run]}));
+                }
+                return Ok(());
+            }
+            WorkflowAction::PauseRun { run_id } => call("pauseRun", json!({"runId":run_id})).await,
+            WorkflowAction::ResumeRun { run_id } => {
+                call("resumeRun", json!({"runId":run_id})).await
+            }
+            WorkflowAction::StopRun { run_id, worker_id } => {
+                call("stopRun", json!({"runId":run_id,"workerId":worker_id})).await
+            }
+            WorkflowAction::RestartWorker { run_id, worker_id } => {
+                call(
+                    "restartWorker",
+                    json!({"runId":run_id,"workerId":worker_id}),
+                )
+                .await
+            }
+            WorkflowAction::SetEffort { effort } => {
+                self.apply_workflow_effort(app_server, &effort)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                return Ok(());
+            }
+            WorkflowAction::Save {
+                run_id,
+                name,
+                scope,
+            } => {
+                let thread_id = self
+                    .chat_widget
+                    .thread_id()
+                    .ok_or_else(|| "Parent session is unavailable".to_string())?;
+                let thread_id = thread_id.to_string();
+                let bridge = bridge.clone();
+                let request_handle = app_server.request_handle();
+                let app_event_tx = self.app_event_tx.clone();
+                self.close_transcript_overlay(tui);
+                tokio::spawn(async move {
+                    let result: std::result::Result<WorkflowSaveResponse, String> = async {
+                        let authority: WorkflowAuthorityCaptureResponse = request_handle
+                            .request_typed(ClientRequest::WorkflowAuthorityCapture {
+                                request_id: codex_app_server_protocol::RequestId::String(format!(
+                                    "workflow-save-authority-{}",
+                                    Uuid::new_v4()
+                                )),
+                                params: codex_app_server_protocol::WorkflowAuthorityCaptureParams {
+                                    parent_thread_id: thread_id.clone(),
+                                    allow_isolated_workspaces: false,
+                                },
+                            })
+                            .await
+                            .map_err(|error| error.to_string())?;
+                        let prepared = bridge
+                            .request(
+                                "prepareSave",
+                                json!({"runId":&run_id,"name":&name,"scope":&scope}),
+                                Duration::from_secs(30),
+                            )
+                            .await
+                            .map_err(|error| error.to_string())?;
+                        request_handle
+                            .request_typed(ClientRequest::WorkflowSave {
+                                request_id: codex_app_server_protocol::RequestId::String(format!(
+                                    "workflow-save-{}",
+                                    Uuid::new_v4()
+                                )),
+                                params: WorkflowSaveParams {
+                                    parent_thread_id: thread_id.clone(),
+                                    authority_ref: authority.authority_ref,
+                                    authority_digest: authority.authority_digest,
+                                    run_id,
+                                    name,
+                                    scope,
+                                    source: prepared["source"]
+                                        .as_str()
+                                        .ok_or_else(|| "prepareSave omitted source".to_string())?
+                                        .to_string(),
+                                    source_digest: prepared["digest"]
+                                        .as_str()
+                                        .ok_or_else(|| "prepareSave omitted digest".to_string())?
+                                        .to_string(),
+                                },
+                            })
+                            .await
+                            .map_err(|error| error.to_string())
+                    }
+                    .await;
+                    app_event_tx.send(crate::app_event::AppEvent::Workflow(
+                        crate::app_event::WorkflowEvent::SaveCompleted { thread_id, result },
+                    ));
+                });
+                return Ok(());
+            }
+            WorkflowAction::Close => return Ok(()),
+        }
+        .map_err(|e| e.to_string())?;
+        let snapshot = bridge.list_runs().await.map_err(|e| e.to_string())?;
+        if let Some(Overlay::Workflow(overlay)) = self.overlay.as_mut() {
+            overlay.update(snapshot);
+        }
+        Ok(())
     }
 
     /// Handle global Esc presses for backtracking when no overlay is present.
@@ -488,6 +637,7 @@ impl App {
             thread_id: base_id,
             nth_user_message,
             prompt: UserMessage {
+                workflow_keyword: None,
                 text: selected.message.clone(),
                 local_images,
                 remote_image_urls: selected.remote_image_urls.clone(),
@@ -721,6 +871,7 @@ mod tests {
 
     fn prompt(text: &str) -> UserMessage {
         UserMessage {
+            workflow_keyword: None,
             text: text.to_string(),
             local_images: Vec::new(),
             remote_image_urls: Vec::new(),

@@ -81,6 +81,15 @@ pub enum McpServerSource {
 }
 
 impl McpServerSource {
+    pub fn plugin_id(&self) -> Option<&str> {
+        match self {
+            Self::Plugin(attribution) | Self::SelectedPlugin(attribution) => {
+                Some(attribution.plugin_id())
+            }
+            _ => None,
+        }
+    }
+
     pub fn is_agent_plugin(&self) -> bool {
         match self {
             Self::Plugin(attribution) | Self::SelectedPlugin(attribution) => {
@@ -141,6 +150,10 @@ pub struct McpServerRegistration {
 }
 
 impl McpServerRegistration {
+    pub fn plugin_id(&self) -> Option<&str> {
+        self.source.plugin_id()
+    }
+
     pub fn from_config(name: String, config: McpServerConfig) -> Self {
         Self::new(
             name,

@@ -5,6 +5,24 @@ use crate::app_event::AppEvent;
 use crate::chatwidget::rate_limits::RATE_LIMIT_SWITCH_PROMPT_VIEW_ID;
 
 impl ChatWidget {
+    pub(crate) fn set_ultracode_mode(&mut self, enabled: bool) {
+        self.config.ultracode = enabled;
+    }
+
+    pub(crate) fn set_workflow_size_guideline(
+        &mut self,
+        guideline: codex_protocol::config_types::WorkflowSizeGuideline,
+    ) {
+        self.config.workflow_size_guideline = Some(guideline);
+    }
+
+    pub(crate) fn set_workflow_commands(
+        &mut self,
+        commands: Vec<crate::bottom_pane::slash_commands::WorkflowCommand>,
+    ) {
+        self.workflow_commands = commands.clone();
+        self.bottom_pane.set_workflow_commands(commands);
+    }
     /// Set the approval policy in the widget's config copy.
     pub(crate) fn set_approval_policy(&mut self, policy: AskForApproval) {
         if let Err(err) = self

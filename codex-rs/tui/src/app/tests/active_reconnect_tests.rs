@@ -119,6 +119,8 @@ async fn reconnect_restores_history_permissions_and_keeps_old_input_paused() -> 
                 app.app_event_tx.clone(),
                 app.dynamic_tool_status_updates.clone(),
                 /*managed_requirement*/ None,
+                /*workflow_handler*/ None,
+                /*workflows_enabled*/ true,
             )
             .await?,
         ));

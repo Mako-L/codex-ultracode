@@ -3,16 +3,30 @@ use super::*;
 use codex_agent_extension::AgentInvocation;
 use codex_agent_extension::AgentRun;
 use codex_agent_extension::AgentRunner;
+use codex_app_server_protocol::FileChangeApprovalDecision;
+use codex_app_server_protocol::FileChangeRequestApprovalParams;
+use codex_app_server_protocol::FileChangeRequestApprovalResponse;
+use codex_app_server_protocol::ServerRequestPayload;
+use codex_app_server_protocol::WorkflowPluginOption;
+use codex_core::ThreadConfigSnapshot;
+use codex_core::config::PermissionProfileSnapshot;
+use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::WriteFileOptions;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AdditionalContextEntry as CoreAdditionalContextEntry;
 use codex_protocol::protocol::AdditionalContextKind as CoreAdditionalContextKind;
+use codex_protocol::protocol::AgentStatus;
+use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnSettingsUpdate;
 use codex_protocol::protocol::TurnSettingsUpdateOutcome;
 use codex_skills::system_cache_root_dir;
+use sha2::Digest;
+use sha2::Sha256;
 
 use crate::image_url::REMOTE_IMAGE_URL_ERROR;
 use crate::image_url::is_remote_image_url;
@@ -87,6 +101,417 @@ pub(crate) struct TurnRequestProcessor {
     thread_list_state_permit: Arc<Semaphore>,
     skills_watcher: Arc<SkillsWatcher>,
     turn_cost_worker: Option<crate::turn_cost_worker::TurnCostWorkerHandle>,
+    workflow_authorities: Arc<Mutex<HashMap<String, WorkflowAuthority>>>,
+    workflow_workers: Arc<Mutex<HashMap<ThreadId, WorkflowWorkerOwnership>>>,
+    workflow_workspaces: Arc<Mutex<HashMap<String, WorkflowWorkspaceOwnership>>>,
+}
+
+#[derive(Clone)]
+struct WorkflowAuthority {
+    parent_thread_id: ThreadId,
+    generation: u64,
+    snapshot: ThreadConfigSnapshot,
+    digest: String,
+    allow_isolated_workspaces: bool,
+    codex_home: AbsolutePathBuf,
+}
+
+#[derive(Clone)]
+struct WorkflowWorkerOwnership {
+    parent_thread_id: ThreadId,
+    authority_digest: String,
+    run_id: String,
+    worker_id: String,
+    launch_intent: bool,
+    read_only: bool,
+    agent_type: String,
+    schema_digest: Option<String>,
+    workspace_id: Option<String>,
+    cwd: AbsolutePathBuf,
+    role_digest: String,
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct WorkflowWorkspaceOwnership {
+    parent_thread_id: ThreadId,
+    authority_ref: String,
+    authority_digest: String,
+    run_id: String,
+    worker_id: String,
+    cwd: AbsolutePathBuf,
+    base_commit: String,
+    permission_profile: PermissionProfile,
+    released: bool,
+    common_git_dir: std::path::PathBuf,
+    repository_cwd: AbsolutePathBuf,
+    branch: String,
+    #[serde(default)]
+    removed: bool,
+    #[serde(default)]
+    checkout_grant: Option<workflow_workspace_permissions::CheckoutGrant>,
+}
+
+#[path = "workflow_workspace_permissions.rs"]
+mod workflow_workspace_permissions;
+
+fn workflow_lock_reason(id: &str) -> String {
+    format!("ultracode-workflow:{id}")
+}
+
+fn workflow_owned_lock(cwd: &std::path::Path, id: &str) -> bool {
+    let Ok(expected) = std::fs::canonicalize(cwd) else {
+        return false;
+    };
+    let Ok(text) = workflow_git(
+        cwd,
+        &[
+            "worktree".as_ref(),
+            "list".as_ref(),
+            "--porcelain".as_ref(),
+            "-z".as_ref(),
+        ],
+    ) else {
+        return false;
+    };
+    let mut matching_record = false;
+    for field in text.split('\0') {
+        if field.is_empty() {
+            matching_record = false;
+        } else if let Some(path) = field.strip_prefix("worktree ") {
+            matching_record = std::fs::canonicalize(path).is_ok_and(|path| path == expected);
+        } else if matching_record && field == format!("locked {}", workflow_lock_reason(id)) {
+            return true;
+        }
+    }
+    false
+}
+
+fn workflow_workspace_unchanged(workspace: &WorkflowWorkspaceOwnership) -> bool {
+    workflow_git(
+        workspace.cwd.as_path(),
+        &["rev-parse".as_ref(), "HEAD".as_ref()],
+    )
+    .is_ok_and(|head| head == workspace.base_commit)
+        && workflow_git(
+            workspace.cwd.as_path(),
+            &["status".as_ref(), "--porcelain".as_ref()],
+        )
+        .is_ok_and(|status| status.is_empty())
+}
+
+#[cfg(test)]
+fn materialize_fixture_worktree(
+    id: &str,
+    workspace: &mut WorkflowWorkspaceOwnership,
+) -> Result<(), String> {
+    workflow_git(
+        workspace.repository_cwd.as_path(),
+        &[
+            "worktree".as_ref(),
+            "add".as_ref(),
+            "-b".as_ref(),
+            workspace.branch.as_ref(),
+            workspace.cwd.as_os_str(),
+            workspace.base_commit.as_ref(),
+        ],
+    )?;
+    workflow_git(
+        workspace.repository_cwd.as_path(),
+        &[
+            "worktree".as_ref(),
+            "lock".as_ref(),
+            "--reason".as_ref(),
+            workflow_lock_reason(id).as_ref(),
+            workspace.cwd.as_os_str(),
+        ],
+    )?;
+    workspace.removed = false;
+    Ok(())
+}
+
+fn workflow_workspace_record_path(
+    common_git_dir: &std::path::Path,
+    id: &str,
+) -> std::path::PathBuf {
+    common_git_dir
+        .join("ultracode-workspaces")
+        .join(format!("{id}.json"))
+}
+
+fn persist_workflow_workspace(
+    id: &str,
+    workspace: &WorkflowWorkspaceOwnership,
+) -> Result<(), String> {
+    let path = workflow_workspace_record_path(&workspace.common_git_dir, id);
+    let directory = path.parent().ok_or("invalid workspace record path")?;
+    for component in [directory, path.as_path()] {
+        if std::fs::symlink_metadata(component)
+            .is_ok_and(|metadata| metadata.file_type().is_symlink())
+        {
+            return Err("workflow ownership metadata contains a symlink".into());
+        }
+    }
+    std::fs::create_dir_all(directory).map_err(|e| e.to_string())?;
+    let temporary = path.with_extension(format!("{}.tmp", Uuid::new_v4()));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(&temporary)
+        .map_err(|error| error.to_string())?;
+    use std::io::Write;
+    file.write_all(&serde_json::to_vec(workspace).map_err(|error| error.to_string())?)
+        .map_err(|error| error.to_string())?;
+    file.sync_all().map_err(|error| error.to_string())?;
+    std::fs::rename(temporary, &path).map_err(|error| error.to_string())?;
+    #[cfg(unix)]
+    std::fs::File::open(directory)
+        .and_then(|file| file.sync_all())
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn load_workflow_workspace(
+    authority_cwd: &std::path::Path,
+    id: &str,
+) -> Result<WorkflowWorkspaceOwnership, String> {
+    let common = workflow_common_git_dir(authority_cwd)?;
+    let bytes =
+        std::fs::read(workflow_workspace_record_path(&common, id)).map_err(|e| e.to_string())?;
+    let workspace: WorkflowWorkspaceOwnership =
+        serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    if workspace.common_git_dir != common {
+        return Err("workspace record belongs to another repository".into());
+    }
+    Ok(workspace)
+}
+
+fn workflow_id_component(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+fn validate_workflow_workspace_id(value: &str) -> Result<(), JSONRPCErrorError> {
+    let id =
+        Uuid::parse_str(value).map_err(|_| invalid_request("invalid workflow workspace ID"))?;
+    if id.to_string() != value {
+        return Err(invalid_request("invalid workflow workspace ID"));
+    }
+    Ok(())
+}
+
+fn workflow_git(cwd: &std::path::Path, args: &[&std::ffi::OsStr]) -> Result<String, String> {
+    let mut command = std::process::Command::new("git");
+    command.current_dir(cwd).args(args);
+    codex_protocol::shell_environment::scrub_non_inheritable_env_vars(&mut command);
+    let output = command.output().map_err(|err| err.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn workflow_common_git_dir(cwd: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    let value = workflow_git(cwd, &["rev-parse".as_ref(), "--git-common-dir".as_ref()])?;
+    std::fs::canonicalize(cwd.join(value)).map_err(|err| err.to_string())
+}
+
+fn workflow_project_save_directory(cwd: &std::path::Path) -> Result<AbsolutePathBuf, String> {
+    let boundary = workflow_git(cwd, &["rev-parse".as_ref(), "--show-toplevel".as_ref()])
+        .ok()
+        .and_then(|path| AbsolutePathBuf::from_absolute_path(path).ok())
+        .or_else(|| AbsolutePathBuf::from_absolute_path(cwd).ok())
+        .ok_or_else(|| "workflow cwd is not absolute".to_string())?;
+    let cwd =
+        AbsolutePathBuf::from_absolute_path(std::fs::canonicalize(cwd).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+    let mut current = Some(cwd.as_path());
+    while let Some(root) = current {
+        if !root.starts_with(boundary.as_path()) {
+            break;
+        }
+        let candidate = root.join(".codex/workflows");
+        if candidate.is_dir() {
+            return AbsolutePathBuf::from_absolute_path(candidate).map_err(|e| e.to_string());
+        }
+        if root == boundary.as_path() {
+            break;
+        }
+        current = root.parent();
+    }
+    Ok(boundary.join(".codex/workflows"))
+}
+
+fn workflow_save_directory_creation_policy(
+    mut policy: codex_protocol::permissions::FileSystemSandboxPolicy,
+    parent_directory: &AbsolutePathBuf,
+) -> codex_protocol::permissions::FileSystemSandboxPolicy {
+    policy
+        .entries
+        .push(codex_protocol::permissions::FileSystemSandboxEntry::new(
+            parent_directory.clone().into(),
+            codex_protocol::permissions::FileSystemAccessMode::Write,
+        ));
+    policy
+}
+
+fn workflow_worktree_matches(
+    cwd: &std::path::Path,
+    common_git_dir: &std::path::Path,
+    base_commit: &str,
+    branch: Option<&str>,
+) -> bool {
+    let Ok(canonical_cwd) = std::fs::canonicalize(cwd) else {
+        return false;
+    };
+    let Ok(top_level) = workflow_git(cwd, &["rev-parse".as_ref(), "--show-toplevel".as_ref()])
+    else {
+        return false;
+    };
+    let Ok(canonical_top_level) = std::fs::canonicalize(top_level) else {
+        return false;
+    };
+    canonical_cwd == canonical_top_level
+        && workflow_common_git_dir(cwd).ok().as_deref() == Some(common_git_dir)
+        && match branch {
+            Some(branch) => workflow_git(
+                cwd,
+                &["symbolic-ref".as_ref(), "-q".as_ref(), "HEAD".as_ref()],
+            )
+            .is_ok_and(|value| value == format!("refs/heads/{branch}")),
+            None => workflow_git(
+                cwd,
+                &["symbolic-ref".as_ref(), "-q".as_ref(), "HEAD".as_ref()],
+            )
+            .is_err(),
+        }
+        && workflow_git(
+            cwd,
+            &[
+                "merge-base".as_ref(),
+                "--is-ancestor".as_ref(),
+                base_commit.as_ref(),
+                "HEAD".as_ref(),
+            ],
+        )
+        .is_ok()
+}
+
+fn workflow_release_eligible(status: &AgentStatus) -> bool {
+    matches!(
+        status,
+        AgentStatus::Completed(_)
+            | AgentStatus::Errored(_)
+            | AgentStatus::Interrupted
+            | AgentStatus::Shutdown
+    )
+}
+
+fn workflow_release_lease(workspace: &mut WorkflowWorkspaceOwnership) {
+    workspace.released = true;
+}
+
+fn workflow_schema_digest(schema: Option<&serde_json::Value>) -> Option<String> {
+    schema.map(|value| format!("{:x}", Sha256::digest(value.to_string().as_bytes())))
+}
+
+fn workflow_effective_selection<T>(
+    parent: Option<T>,
+    role: Option<T>,
+    requested: T,
+    explicit: bool,
+) -> Option<T> {
+    if explicit {
+        Some(requested)
+    } else {
+        role.or(parent)
+    }
+}
+
+fn workflow_role_digest(config: &Config) -> String {
+    let material = format!(
+        "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
+        config.developer_instructions,
+        config.model_reasoning_summary,
+        config.model_verbosity,
+        config.personality,
+        config.features,
+        config.include_skill_instructions,
+        config.config_layer_stack,
+    );
+    format!("{:x}", Sha256::digest(material.as_bytes()))
+}
+
+async fn workflow_apply_role(config: &mut Config, agent_type: &str) -> Result<String, String> {
+    let native_role = match agent_type {
+        "general-purpose" | "Plan" => "default",
+        "Explore" => "explorer",
+        custom => custom,
+    };
+    codex_core::apply_role_to_config(config, Some(native_role)).await?;
+    config.exclude_ultracode_plugin_mcp = true;
+    let _ = config.features.disable(Feature::Collab);
+    let _ = config.features.disable(Feature::MultiAgentV2);
+    let mut mcp_servers = config.mcp_servers.get().clone();
+    mcp_servers.remove("ultracode");
+    if let Some(task_tools) = mcp_servers.get_mut("codex_tui") {
+        let disabled = task_tools.disabled_tools.get_or_insert_default();
+        if !disabled.iter().any(|tool| tool == "workflow") {
+            disabled.push("workflow".to_string());
+        }
+    }
+    config
+        .mcp_servers
+        .set(mcp_servers)
+        .map_err(|err| format!("workflow MCP policy is invalid: {err}"))?;
+    Ok(workflow_role_digest(config))
+}
+
+fn workflow_authority_digest(
+    snapshot: &ThreadConfigSnapshot,
+    plugins: &[WorkflowPluginOption],
+    web_search_available: bool,
+) -> String {
+    let material = format!(
+        "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{web_search_available}",
+        snapshot.approval_policy,
+        snapshot.approvals_reviewer,
+        snapshot.permission_profile,
+        snapshot.active_permission_profile,
+        snapshot.environments,
+        snapshot.workspace_roots,
+        snapshot.profile_workspace_roots,
+        snapshot.cwd(),
+        plugins,
+    );
+    format!("{:x}", Sha256::digest(material.as_bytes()))
+}
+
+fn workflow_authority_matches(left: &ThreadConfigSnapshot, right: &ThreadConfigSnapshot) -> bool {
+    left.approval_policy == right.approval_policy
+        && left.approvals_reviewer == right.approvals_reviewer
+        && left.permission_profile == right.permission_profile
+        && left.active_permission_profile == right.active_permission_profile
+        && left.environments == right.environments
+        && left.workspace_roots == right.workspace_roots
+        && left.profile_workspace_roots == right.profile_workspace_roots
+        && left.cwd() == right.cwd()
+}
+
+fn workflow_authority_ref_matches(
+    authority_parent_thread_id: ThreadId,
+    authority_generation: u64,
+    parent_thread_id: ThreadId,
+    generation: u64,
+) -> bool {
+    authority_parent_thread_id == parent_thread_id && authority_generation == generation
 }
 
 fn map_additional_context(
@@ -110,6 +535,400 @@ fn map_additional_context(
             )
         })
         .collect()
+}
+
+#[cfg(test)]
+#[path = "workflow_child_inventory_tests.rs"]
+mod workflow_child_inventory_tests;
+
+#[cfg(test)]
+mod workflow_authority_tests {
+    use super::*;
+    use codex_protocol::config_types::ApprovalsReviewer;
+    use codex_protocol::config_types::ModeKind;
+    use codex_protocol::config_types::Settings;
+    use codex_protocol::models::PermissionProfile;
+    use codex_protocol::permissions::FileSystemAccessMode;
+    use codex_protocol::permissions::FileSystemSandboxEntry;
+    use codex_protocol::protocol::AskForApproval;
+    use codex_protocol::protocol::SessionSource;
+    use codex_utils_absolute_path::AbsolutePathBuf;
+    use std::path::PathBuf;
+
+    fn path(value: &str) -> AbsolutePathBuf {
+        AbsolutePathBuf::try_from(PathBuf::from(value)).expect("absolute test path")
+    }
+
+    fn snapshot() -> ThreadConfigSnapshot {
+        let cwd = path("/repo");
+        ThreadConfigSnapshot {
+            model: "gpt-test".into(),
+            model_provider_id: "openai".into(),
+            service_tier: None,
+            approval_policy: AskForApproval::OnRequest,
+            approvals_reviewer: ApprovalsReviewer::User,
+            permission_profile: PermissionProfile::Disabled,
+            full_access: true,
+            active_permission_profile: None,
+            environments: TurnEnvironmentSelections::new(cwd.clone(), Vec::new()),
+            workspace_roots: vec![cwd.clone()],
+            profile_workspace_roots: vec![cwd],
+            ephemeral: false,
+            reasoning_effort: None,
+            reasoning_summary: None,
+            personality: None,
+            collaboration_mode: CollaborationMode {
+                mode: ModeKind::Default,
+                settings: Settings {
+                    model: "gpt-test".into(),
+                    reasoning_effort: None,
+                    developer_instructions: None,
+                },
+            },
+            session_source: SessionSource::Cli,
+            history_mode: Default::default(),
+            forked_from_thread_id: None,
+            parent_thread_id: None,
+            thread_source: None,
+            originator: "test".into(),
+        }
+    }
+
+    #[test]
+    fn rejects_every_authority_change() {
+        let captured = snapshot();
+
+        let mut changed = captured.clone();
+        changed.permission_profile = PermissionProfile::default();
+        assert!(!workflow_authority_matches(&captured, &changed));
+
+        let mut changed = captured.clone();
+        changed.workspace_roots = vec![path("/other")];
+        assert!(!workflow_authority_matches(&captured, &changed));
+
+        let mut changed = captured.clone();
+        changed.profile_workspace_roots = vec![path("/other")];
+        assert!(!workflow_authority_matches(&captured, &changed));
+
+        let mut changed = captured.clone();
+        changed.approval_policy = AskForApproval::Never;
+        assert!(!workflow_authority_matches(&captured, &changed));
+
+        let mut changed = captured.clone();
+        changed.approvals_reviewer = ApprovalsReviewer::AutoReview;
+        assert!(!workflow_authority_matches(&captured, &changed));
+
+        let mut changed = captured.clone();
+        changed.environments = TurnEnvironmentSelections::new(path("/other"), Vec::new());
+        assert!(!workflow_authority_matches(&captured, &changed));
+    }
+
+    #[test]
+    fn rejects_parent_or_generation_mismatch() {
+        let parent = ThreadId::new();
+        assert!(workflow_authority_ref_matches(parent, 3, parent, 3));
+        assert!(!workflow_authority_ref_matches(
+            parent,
+            3,
+            ThreadId::new(),
+            3
+        ));
+        assert!(!workflow_authority_ref_matches(parent, 3, parent, 4));
+    }
+
+    #[test]
+    fn nested_worktree_intersection_preserves_parent_denial() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = AbsolutePathBuf::from_absolute_path(temp.path()).expect("root");
+        let checkout = root.join(".ultracode/worktrees/run-worker");
+        std::fs::create_dir_all(&checkout).expect("checkout");
+        let denied = checkout.join("secret");
+        std::fs::write(&denied, "secret").expect("secret");
+        let authority = PermissionProfile::workspace_write_with(
+            &[],
+            codex_protocol::permissions::NetworkSandboxPolicy::Restricted,
+            false,
+            true,
+        )
+        .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&root));
+        let mut policy = authority.file_system_sandbox_policy();
+        policy.entries.push(FileSystemSandboxEntry::new(
+            denied.clone().into(),
+            FileSystemAccessMode::Deny,
+        ));
+        let authority = PermissionProfile::from_runtime_permissions(
+            &policy,
+            codex_protocol::permissions::NetworkSandboxPolicy::Restricted,
+        );
+        let requested = PermissionProfile::workspace_write_with(
+            &[],
+            codex_protocol::permissions::NetworkSandboxPolicy::Restricted,
+            false,
+            true,
+        )
+        .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&checkout));
+        let result = codex_protocol::intersect_effective_permission_profiles(
+            &authority,
+            &requested,
+            checkout.as_path(),
+        )
+        .expect("safe intersection");
+        let denied = denied.canonicalize().expect("canonical denied path");
+        assert!(result.file_system_sandbox_policy().entries.contains(
+            &FileSystemSandboxEntry::new(denied.into(), FileSystemAccessMode::Deny)
+        ));
+    }
+
+    #[test]
+    fn workflow_save_directory_bootstrap_is_scoped_before_final_write() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = AbsolutePathBuf::from_absolute_path(
+            temp.path().canonicalize().expect("canonical root"),
+        )
+        .expect("absolute root");
+        let parent = root.join(".codex");
+        let config = parent.join("config.toml");
+        let workflows = parent.join("workflows");
+        let final_policy = PermissionProfile::workspace_write_with(
+            &[],
+            codex_protocol::permissions::NetworkSandboxPolicy::Restricted,
+            false,
+            true,
+        )
+        .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&root))
+        .file_system_sandbox_policy();
+        let additional = codex_protocol::models::AdditionalPermissionProfile {
+            file_system: Some(
+                codex_protocol::models::FileSystemPermissions::from_read_write_roots(
+                    Some(vec![]),
+                    Some(vec![workflows]),
+                ),
+            ),
+            ..Default::default()
+        };
+        let final_policy =
+            codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy(
+                &final_policy,
+                Some(&additional),
+            );
+        assert!(!final_policy.can_write_path_with_cwd(config.as_path(), root.as_path()));
+        assert!(!final_policy.can_write_path_with_cwd(parent.as_path(), root.as_path()));
+
+        let bootstrap = workflow_save_directory_creation_policy(final_policy.clone(), &parent);
+        assert!(bootstrap.can_write_path_with_cwd(parent.as_path(), root.as_path()));
+        assert!(bootstrap.can_write_path_with_cwd(config.as_path(), root.as_path()));
+        let mut explicitly_denied = final_policy;
+        explicitly_denied.entries.push(FileSystemSandboxEntry::new(
+            parent.clone().into(),
+            FileSystemAccessMode::Deny,
+        ));
+        let denied_bootstrap = workflow_save_directory_creation_policy(explicitly_denied, &parent);
+        assert!(!denied_bootstrap.can_write_path_with_cwd(parent.as_path(), root.as_path()));
+    }
+
+    #[test]
+    fn creates_detached_worktree_at_parent_head() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        workflow_git(temp.path(), &["init".as_ref()]).expect("init");
+        workflow_git(
+            temp.path(),
+            &[
+                "config".as_ref(),
+                "user.email".as_ref(),
+                "test@example.com".as_ref(),
+            ],
+        )
+        .expect("email");
+        workflow_git(
+            temp.path(),
+            &["config".as_ref(), "user.name".as_ref(), "Test".as_ref()],
+        )
+        .expect("name");
+        std::fs::write(temp.path().join("file"), "base").expect("file");
+        workflow_git(temp.path(), &["add".as_ref(), "file".as_ref()]).expect("add");
+        workflow_git(
+            temp.path(),
+            &["commit".as_ref(), "-m".as_ref(), "base".as_ref()],
+        )
+        .expect("commit");
+        let base =
+            workflow_git(temp.path(), &["rev-parse".as_ref(), "HEAD".as_ref()]).expect("head");
+        let checkout = temp.path().join(".ultracode/worktrees/run-worker");
+        std::fs::create_dir_all(checkout.parent().expect("parent")).expect("root");
+        workflow_git(
+            temp.path(),
+            &[
+                "worktree".as_ref(),
+                "add".as_ref(),
+                "--detach".as_ref(),
+                checkout.as_os_str(),
+                base.as_ref(),
+            ],
+        )
+        .expect("worktree");
+        assert_eq!(
+            workflow_git(&checkout, &["rev-parse".as_ref(), "HEAD".as_ref()])
+                .expect("worktree head"),
+            base
+        );
+        assert!(checkout.join(".git").is_file());
+        let common_git_dir = workflow_common_git_dir(temp.path()).expect("common git dir");
+        assert!(workflow_worktree_matches(
+            &checkout,
+            &common_git_dir,
+            &base,
+            None,
+        ));
+        workflow_git(
+            &checkout,
+            &["switch".as_ref(), "-c".as_ref(), "retargeted".as_ref()],
+        )
+        .expect("attach worktree to another branch");
+        assert!(!workflow_worktree_matches(
+            &checkout,
+            &common_git_dir,
+            &base,
+            None,
+        ));
+        assert!(!workflow_worktree_matches(
+            &checkout,
+            &common_git_dir,
+            &base,
+            Some("owned-branch"),
+        ));
+        let mut workspace = WorkflowWorkspaceOwnership {
+            parent_thread_id: ThreadId::new(),
+            authority_ref: "authority".into(),
+            authority_digest: "digest".into(),
+            run_id: "run".into(),
+            worker_id: "worker".into(),
+            cwd: AbsolutePathBuf::from_absolute_path(&checkout).expect("checkout path"),
+            base_commit: base,
+            permission_profile: PermissionProfile::Disabled,
+            released: false,
+            common_git_dir,
+            repository_cwd: AbsolutePathBuf::from_absolute_path(temp.path()).expect("repo cwd"),
+            branch: "retargeted".into(),
+            removed: false,
+            checkout_grant: None,
+        };
+        persist_workflow_workspace("workspace-id", &workspace).expect("persist ownership");
+        let restored = load_workflow_workspace(temp.path(), "workspace-id")
+            .expect("restore ownership after registry loss");
+        assert_eq!(restored.parent_thread_id, workspace.parent_thread_id);
+        assert_eq!(restored.authority_digest, workspace.authority_digest);
+        assert_eq!(restored.cwd, workspace.cwd);
+        assert_eq!(restored.base_commit, workspace.base_commit);
+        workflow_git(
+            temp.path(),
+            &[
+                "worktree".as_ref(),
+                "lock".as_ref(),
+                "--reason".as_ref(),
+                workflow_lock_reason("workspace-id").as_ref(),
+                checkout.as_os_str(),
+            ],
+        )
+        .expect("owned lock");
+        assert!(workflow_owned_lock(&checkout, "workspace-id"));
+        assert!(workflow_workspace_unchanged(&workspace));
+        workflow_git(
+            temp.path(),
+            &["worktree".as_ref(), "unlock".as_ref(), checkout.as_os_str()],
+        )
+        .expect("unlock");
+        workflow_git(
+            temp.path(),
+            &[
+                "worktree".as_ref(),
+                "lock".as_ref(),
+                "--reason".as_ref(),
+                "foreign".as_ref(),
+                checkout.as_os_str(),
+            ],
+        )
+        .expect("foreign lock");
+        assert!(!workflow_owned_lock(&checkout, "workspace-id"));
+        workflow_git(
+            temp.path(),
+            &["worktree".as_ref(), "unlock".as_ref(), checkout.as_os_str()],
+        )
+        .expect("unlock foreign");
+        workflow_git(
+            temp.path(),
+            &["worktree".as_ref(), "remove".as_ref(), checkout.as_os_str()],
+        )
+        .expect("remove clean checkout");
+        workflow_git(
+            temp.path(),
+            &["branch".as_ref(), "-D".as_ref(), "retargeted".as_ref()],
+        )
+        .expect("remove temporary branch");
+        workspace.removed = true;
+        materialize_fixture_worktree("workspace-id", &mut workspace)
+            .expect("restore cache-miss workspace");
+        assert!(checkout.exists());
+        assert!(workflow_owned_lock(&checkout, "workspace-id"));
+        std::fs::write(checkout.join("edit"), "retained").expect("edit");
+        assert!(!workflow_workspace_unchanged(&workspace));
+        workflow_git(
+            temp.path(),
+            &["worktree".as_ref(), "unlock".as_ref(), checkout.as_os_str()],
+        )
+        .expect("release changed owned lock");
+        assert!(!workflow_owned_lock(&checkout, "workspace-id"));
+        workflow_git(&checkout, &["add".as_ref(), "edit".as_ref()]).expect("add edit");
+        workflow_git(
+            &checkout,
+            &["commit".as_ref(), "-m".as_ref(), "changed".as_ref()],
+        )
+        .expect("commit edit");
+        assert!(!workflow_workspace_unchanged(&workspace));
+        workflow_release_lease(&mut workspace);
+        assert!(workspace.released);
+        assert_eq!(
+            std::fs::read_to_string(checkout.join("edit")).expect("retained edit"),
+            "retained"
+        );
+    }
+
+    #[test]
+    fn release_rejects_active_workers() {
+        assert!(!workflow_release_eligible(&AgentStatus::PendingInit));
+        assert!(!workflow_release_eligible(&AgentStatus::Running));
+        assert!(workflow_release_eligible(&AgentStatus::Completed(None)));
+        assert!(workflow_release_eligible(&AgentStatus::Interrupted));
+    }
+
+    #[test]
+    fn project_save_prefers_nearest_existing_ancestor_workflows() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        workflow_git(temp.path(), &["init".as_ref()]).expect("init");
+        let nested = temp.path().join("packages/tool/src");
+        std::fs::create_dir_all(&nested).expect("nested cwd");
+        let nearest = temp.path().join("packages/tool/.codex/workflows");
+        std::fs::create_dir_all(&nearest).expect("nearest workflows");
+        assert_eq!(
+            workflow_project_save_directory(&nested).expect("save directory"),
+            AbsolutePathBuf::from_absolute_path(
+                std::fs::canonicalize(nearest).expect("canonical nearest"),
+            )
+            .expect("absolute nearest")
+        );
+    }
+
+    #[test]
+    fn workflow_workspace_ids_are_canonical_uuids_before_record_lookup() {
+        let valid = Uuid::new_v4().to_string();
+        assert!(validate_workflow_workspace_id(&valid).is_ok());
+        let uppercase = valid.to_uppercase();
+        for invalid in ["../owner", "/tmp/owner", "workspace-id", &uppercase] {
+            assert!(
+                validate_workflow_workspace_id(invalid).is_err(),
+                "{invalid}"
+            );
+        }
+    }
 }
 
 struct ThreadSettingsBuildParams {
@@ -160,7 +979,1249 @@ impl TurnRequestProcessor {
             thread_list_state_permit,
             skills_watcher,
             turn_cost_worker,
+            workflow_authorities: Arc::new(Mutex::new(HashMap::new())),
+            workflow_workers: Arc::new(Mutex::new(HashMap::new())),
+            workflow_workspaces: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    pub(crate) async fn workflow_authority_capture(
+        &self,
+        params: WorkflowAuthorityCaptureParams,
+    ) -> Result<WorkflowAuthorityCaptureResponse, JSONRPCErrorError> {
+        let (parent_thread_id, parent) = self.load_thread(&params.parent_thread_id).await?;
+        let snapshot = parent.config_snapshot().await;
+        let codex_home = parent.effective_config().await.codex_home.clone();
+        let authority_ref = Uuid::new_v4().to_string();
+        let generation = 1;
+        let plugins = parent
+            .workflow_plugin_roots()
+            .await
+            .into_iter()
+            .filter(|(name, _)| {
+                !name.is_empty()
+                    && name.len() <= 64
+                    && name.bytes().all(|byte| {
+                        byte.is_ascii_lowercase()
+                            || byte.is_ascii_digit()
+                            || matches!(byte, b'-' | b'_')
+                    })
+            })
+            .map(|(name, root)| WorkflowPluginOption {
+                name,
+                root: root.to_string_lossy().into_owned(),
+                workflows: vec!["workflows".to_string()],
+            })
+            .collect::<Vec<_>>();
+        let effective_config = parent.effective_config().await;
+        let web_search_available = effective_config.web_search_mode.value()
+            != codex_protocol::config_types::WebSearchMode::Disabled;
+        let authority_digest = workflow_authority_digest(&snapshot, &plugins, web_search_available);
+        let models = self
+            .thread_manager
+            .get_models_manager()
+            .list_models(
+                codex_models_manager::manager::RefreshStrategy::Offline,
+                self.config.http_client_factory(),
+            )
+            .await
+            .into_iter()
+            .map(|preset| WorkflowModelOption {
+                model: preset.model,
+                default_effort: preset.default_reasoning_effort,
+                supported_efforts: preset
+                    .supported_reasoning_efforts
+                    .into_iter()
+                    .map(|effort| effort.effort)
+                    .collect(),
+            })
+            .collect();
+        self.workflow_authorities.lock().await.insert(
+            authority_ref.clone(),
+            WorkflowAuthority {
+                parent_thread_id,
+                generation,
+                snapshot: snapshot.clone(),
+                digest: authority_digest.clone(),
+                allow_isolated_workspaces: params.allow_isolated_workspaces,
+                codex_home,
+            },
+        );
+        Ok(WorkflowAuthorityCaptureResponse {
+            authority_ref,
+            generation,
+            authority_digest,
+            cwd: snapshot.cwd().to_string_lossy().into_owned(),
+            parent_model: snapshot.model,
+            parent_effort: snapshot.reasoning_effort,
+            models,
+            plugins,
+            web_search_available,
+            workflow_host_url: effective_config
+                .mcp_servers
+                .get()
+                .get("codex_tui")
+                .filter(|server| server.enabled)
+                .and_then(|server| match &server.transport {
+                    codex_config::McpServerTransportConfig::StreamableHttp { url, .. } => {
+                        Some(url.clone())
+                    }
+                    _ => None,
+                }),
+        })
+    }
+
+    pub(crate) async fn workflow_completion_inject(
+        &self,
+        params: WorkflowCompletionInjectParams,
+    ) -> Result<WorkflowCompletionInjectResponse, JSONRPCErrorError> {
+        if !workflow_id_component(&params.run_id) {
+            return Err(invalid_request("invalid workflow completion run ID"));
+        }
+        let (_, parent) = self.load_thread(&params.parent_thread_id).await?;
+        let submission = parent
+            .inject_workflow_completion(params.run_id, params.summary)
+            .await
+            .map_err(|e| internal_error(format!("failed to deliver workflow completion: {e}")))?;
+        workflow_completion_response(submission)
+    }
+
+    async fn workflow_file_authority(
+        &self,
+        parent_thread_id: &str,
+        authority_ref: &str,
+        authority_digest: &str,
+    ) -> Result<(WorkflowAuthority, Arc<CodexThread>), JSONRPCErrorError> {
+        let (parent_id, parent) = self.load_thread(parent_thread_id).await?;
+        let authority = self
+            .workflow_authorities
+            .lock()
+            .await
+            .get(authority_ref)
+            .cloned()
+            .ok_or_else(|| invalid_request("unknown workflow authority"))?;
+        if authority.parent_thread_id != parent_id || authority.digest != authority_digest {
+            return Err(invalid_request("workflow authority does not match parent"));
+        }
+        let current = parent.config_snapshot().await;
+        if !workflow_authority_matches(&authority.snapshot, &current) {
+            return Err(invalid_request("workflow authority is stale"));
+        }
+        Ok((authority, parent))
+    }
+
+    pub(crate) async fn workflow_script_read(
+        &self,
+        params: WorkflowScriptReadParams,
+    ) -> Result<WorkflowScriptReadResponse, JSONRPCErrorError> {
+        let (authority, parent) = self
+            .workflow_file_authority(
+                &params.parent_thread_id,
+                &params.authority_ref,
+                &params.authority_digest,
+            )
+            .await?;
+        let requested = std::path::Path::new(&params.script_path);
+        let absolute = if requested.is_absolute() {
+            requested.to_path_buf()
+        } else {
+            authority.snapshot.cwd().join(requested).to_path_buf()
+        };
+        let absolute = AbsolutePathBuf::from_absolute_path(absolute)
+            .map_err(|err| invalid_request(format!("invalid workflow script path: {err}")))?;
+        let (fs, sandbox, _) = parent
+            .workflow_file_access()
+            .await
+            .ok_or_else(|| invalid_request("parent workflow filesystem is unavailable"))?;
+        let path = codex_utils_path_uri::PathUri::from_abs_path(&absolute);
+        let canonical = fs
+            .canonicalize(&path, Some(&sandbox))
+            .await
+            .map_err(|err| invalid_request(format!("workflow script is not readable: {err}")))?;
+        let source = fs
+            .read_file_text(&canonical, Default::default(), Some(&sandbox))
+            .await
+            .map_err(|err| invalid_request(format!("workflow script is not readable: {err}")))?;
+        Ok(WorkflowScriptReadResponse {
+            resolved_path: canonical
+                .to_abs_path()
+                .map_err(|err| invalid_request(err.to_string()))?
+                .to_string_lossy()
+                .into_owned(),
+            source_digest: format!("{:x}", Sha256::digest(source.as_bytes())),
+            source,
+        })
+    }
+
+    pub(crate) async fn workflow_save(
+        &self,
+        params: WorkflowSaveParams,
+    ) -> Result<WorkflowSaveResponse, JSONRPCErrorError> {
+        let valid_name = !params.name.is_empty()
+            && params.name.len() <= 64
+            && !params.name.starts_with('-')
+            && params
+                .name
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+        if !valid_name || !workflow_id_component(&params.run_id) {
+            return Err(invalid_request("invalid workflow save identity"));
+        }
+        if format!("{:x}", Sha256::digest(params.source.as_bytes())) != params.source_digest {
+            return Err(invalid_request("workflow save source digest mismatch"));
+        }
+        let (authority, parent) = self
+            .workflow_file_authority(
+                &params.parent_thread_id,
+                &params.authority_ref,
+                &params.authority_digest,
+            )
+            .await?;
+        let (fs, mut sandbox, cwd) = parent
+            .workflow_file_access()
+            .await
+            .ok_or_else(|| invalid_request("parent workflow filesystem is unavailable"))?;
+        let directory = match params.scope.as_str() {
+            "user" => {
+                let root = codex_utils_path_uri::PathUri::from_abs_path(&authority.codex_home);
+                match fs.canonicalize(&root, Some(&sandbox)).await {
+                    Ok(root) => root
+                        .to_abs_path()
+                        .map_err(|err| invalid_request(err.to_string()))?
+                        .join("workflows"),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        authority.codex_home.join("workflows")
+                    }
+                    Err(error) => {
+                        return Err(invalid_request(format!(
+                            "personal workflow root is not accessible: {error}"
+                        )));
+                    }
+                }
+            }
+            "project" => workflow_project_save_directory(authority.snapshot.cwd().as_path())
+                .map_err(invalid_request)?,
+            _ => return Err(invalid_request("invalid workflow save scope")),
+        };
+        let target = directory.join(format!("{}.js", params.name));
+        let config_directory = (params.scope == "project")
+            .then(|| directory.parent())
+            .flatten();
+        for path in [
+            config_directory,
+            Some(directory.clone()),
+            Some(target.clone()),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if std::fs::symlink_metadata(path.as_path()).is_ok_and(|m| m.file_type().is_symlink()) {
+                return Err(invalid_request("unsafe symlink workflow save destination"));
+            }
+        }
+        let permission = authority.snapshot.permission_profile.clone();
+        let mut policy = permission.file_system_sandbox_policy();
+        if !policy.can_write_path_with_cwd(target.as_path(), cwd.as_path()) {
+            let approved = match authority.snapshot.approvals_reviewer {
+                codex_protocol::config_types::ApprovalsReviewer::AutoReview => {
+                    parent
+                        .review_workflow_save(
+                            target.clone(),
+                            format!("create {}", target.display()),
+                        )
+                        .await
+                }
+                codex_protocol::config_types::ApprovalsReviewer::User => {
+                    if matches!(
+                        authority.snapshot.approval_policy,
+                        codex_protocol::protocol::AskForApproval::Never
+                    ) || matches!(authority.snapshot.approval_policy, codex_protocol::protocol::AskForApproval::Granular(ref g) if !g.sandbox_approval)
+                    {
+                        false
+                    } else {
+                        let connections = self
+                            .thread_state_manager
+                            .subscribed_connection_ids(authority.parent_thread_id)
+                            .await;
+                        if connections.is_empty() {
+                            false
+                        } else {
+                            let (_, rx) = self
+                                .outgoing
+                                .send_request_to_connections(
+                                    Some(&connections),
+                                    ServerRequestPayload::FileChangeRequestApproval(
+                                        FileChangeRequestApprovalParams {
+                                            thread_id: authority.parent_thread_id.to_string(),
+                                            turn_id: format!("workflow-save-{}", params.run_id),
+                                            item_id: Uuid::new_v4().to_string(),
+                                            started_at_ms: chrono::Utc::now().timestamp_millis(),
+                                            reason: Some(format!(
+                                                "Save workflow '{}'",
+                                                params.name
+                                            )),
+                                            grant_root: Some(directory.to_path_buf()),
+                                        },
+                                    ),
+                                    Some(authority.parent_thread_id),
+                                )
+                                .await;
+                            rx.await
+                                .ok()
+                                .and_then(Result::ok)
+                                .and_then(|v| {
+                                    serde_json::from_value::<FileChangeRequestApprovalResponse>(v)
+                                        .ok()
+                                })
+                                .is_some_and(|r| {
+                                    matches!(
+                                        r.decision,
+                                        FileChangeApprovalDecision::Accept
+                                            | FileChangeApprovalDecision::AcceptForSession
+                                    )
+                                })
+                        }
+                    }
+                }
+            };
+            if !approved {
+                return Err(invalid_request("workflow save was not approved"));
+            }
+            let additional = codex_protocol::models::AdditionalPermissionProfile {
+                file_system: Some(
+                    codex_protocol::models::FileSystemPermissions::from_read_write_roots(
+                        Some(vec![]),
+                        Some(vec![directory.clone()]),
+                    ),
+                ),
+                ..Default::default()
+            };
+            policy = codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy(
+                &policy,
+                Some(&additional),
+            );
+            sandbox.permissions = PermissionProfile::from_runtime_permissions_with_enforcement(
+                permission.enforcement(),
+                &policy,
+                permission.network_sandbox_policy(),
+            )
+            .into();
+        }
+        // Creating `.codex/workflows` may need write access to its protected
+        // `.codex` parent. Keep that parent grant scoped to this typed mkdir
+        // operation; restore protected metadata denials before writing source.
+        let parent_directory = directory.parent();
+        let parent_missing = match parent_directory.as_ref() {
+            Some(path) => match std::fs::symlink_metadata(path.as_path()) {
+                Ok(_) => false,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+                Err(error) => {
+                    return Err(invalid_request(format!(
+                        "workflow save parent is not accessible: {error}"
+                    )));
+                }
+            },
+            None => false,
+        };
+        let mut create_sandbox = sandbox.clone();
+        if parent_missing {
+            let parent_directory = parent_directory
+                .as_ref()
+                .expect("missing workflow save parent");
+            let create_policy =
+                workflow_save_directory_creation_policy(policy.clone(), parent_directory);
+            create_sandbox.permissions =
+                PermissionProfile::from_runtime_permissions_with_enforcement(
+                    permission.enforcement(),
+                    &create_policy,
+                    permission.network_sandbox_policy(),
+                )
+                .into();
+        }
+        let dir_uri = codex_utils_path_uri::PathUri::from_abs_path(&directory);
+        match fs
+            .create_directory(
+                &dir_uri,
+                CreateDirectoryOptions {
+                    recursive: true,
+                    follow_symlinks: false,
+                },
+                Some(&create_sandbox),
+            )
+            .await
+        {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => {
+                return Err(invalid_request(format!(
+                    "workflow save directory failed: {e}"
+                )));
+            }
+        }
+        let target_uri = codex_utils_path_uri::PathUri::from_abs_path(&target);
+        fs.write_file(
+            &target_uri,
+            params.source.into_bytes(),
+            WriteFileOptions {
+                follow_symlinks: false,
+                create_new: true,
+            },
+            Some(&sandbox),
+        )
+        .await
+        .map_err(|e| invalid_request(format!("workflow save failed: {e}")))?;
+        Ok(WorkflowSaveResponse {
+            path: target.to_string_lossy().into_owned(),
+        })
+    }
+
+    pub(crate) async fn workflow_workspace_prepare(
+        &self,
+        params: WorkflowWorkspacePrepareParams,
+    ) -> Result<WorkflowWorkspacePrepareResponse, JSONRPCErrorError> {
+        if !workflow_id_component(&params.run_id) || !workflow_id_component(&params.worker_id) {
+            return Err(invalid_request("workflow workspace identity is invalid"));
+        }
+        let authority = self
+            .workflow_authorities
+            .lock()
+            .await
+            .get(&params.authority_ref)
+            .cloned()
+            .ok_or_else(|| invalid_request("workflow authority reference is unknown"))?;
+        if authority.digest != params.authority_digest {
+            return Err(invalid_request("workflow authority reference is stale"));
+        }
+        let parent = self
+            .thread_manager
+            .get_thread(authority.parent_thread_id)
+            .await
+            .map_err(|_| invalid_request("workflow parent thread is unavailable"))?;
+        let current = parent.config_snapshot().await;
+        if !workflow_authority_matches(&authority.snapshot, &current)
+            || params.requested_cwd != current.cwd().to_string_lossy()
+        {
+            return Err(invalid_request("workflow parent authority changed"));
+        }
+        let mut role_config = parent.effective_config().await.as_ref().clone();
+        role_config.model = Some(current.model.clone());
+        role_config
+            .model_reasoning_effort
+            .clone_from(&current.reasoning_effort);
+        let role_digest = workflow_apply_role(&mut role_config, &params.agent_type)
+            .await
+            .map_err(invalid_request)?;
+        if params.isolation.is_none() {
+            return Ok(WorkflowWorkspacePrepareResponse {
+                workspace_id: None,
+                cwd: params.requested_cwd,
+                isolated: false,
+                base_commit: None,
+                authority_generation: authority.generation,
+                role_digest,
+            });
+        }
+        if params.isolation.as_deref() != Some("worktree") {
+            return Err(invalid_request(
+                "workflow workspace isolation is unsupported",
+            ));
+        }
+        if !authority.allow_isolated_workspaces {
+            return Err(invalid_request(
+                "workflow workspace isolation was not approved by the parent",
+            ));
+        }
+
+        if let Some(previous_id) = params
+            .previous
+            .as_ref()
+            .and_then(|previous| previous.workspace_id.as_ref())
+        {
+            validate_workflow_workspace_id(previous_id)?;
+            let mut workspaces = self.workflow_workspaces.lock().await;
+            if !workspaces.contains_key(previous_id) {
+                let persisted = load_workflow_workspace(current.cwd().as_path(), previous_id)
+                    .map_err(|_| {
+                        invalid_request("previous workflow workspace is not owned by this host")
+                    })?;
+                workspaces.insert(previous_id.clone(), persisted);
+            }
+            let previous = workspaces
+                .get_mut(previous_id)
+                .expect("inserted or present");
+            if previous
+                .checkout_grant
+                .as_ref()
+                .is_none_or(|grant| !grant.matches(previous_id, previous))
+                || previous.parent_thread_id != authority.parent_thread_id
+                || previous.authority_digest != params.authority_digest
+                || previous.run_id != params.run_id
+                || previous.worker_id != params.worker_id
+                || params.previous.as_ref().is_none_or(|p| {
+                    p.cwd != previous.cwd.to_string_lossy()
+                        || p.base_commit.as_ref() != Some(&previous.base_commit)
+                })
+                || (!previous.removed
+                    && !workflow_worktree_matches(
+                        previous.cwd.as_path(),
+                        &previous.common_git_dir,
+                        &previous.base_commit,
+                        Some(&previous.branch),
+                    ))
+            {
+                return Err(invalid_request(
+                    "previous workflow workspace ownership is stale",
+                ));
+            }
+            previous.authority_ref.clone_from(&params.authority_ref);
+            previous.released = false;
+            persist_workflow_workspace(previous_id, previous).map_err(|e| {
+                internal_error(format!("failed to persist workflow ownership: {e}"))
+            })?;
+            return Ok(WorkflowWorkspacePrepareResponse {
+                workspace_id: Some(previous_id.clone()),
+                cwd: previous.cwd.to_string_lossy().into_owned(),
+                isolated: true,
+                base_commit: Some(previous.base_commit.clone()),
+                authority_generation: authority.generation,
+                role_digest,
+            });
+        }
+
+        let canonical_cwd = AbsolutePathBuf::from_absolute_path(
+            std::fs::canonicalize(current.cwd())
+                .map_err(|error| invalid_request(error.to_string()))?,
+        )
+        .map_err(|error| invalid_request(error.to_string()))?;
+        let workspace_root = canonical_cwd.join(".ultracode/worktrees");
+        let checkout = workspace_root.join(format!("{}-{}", params.run_id, params.worker_id));
+        if checkout.exists() {
+            return Err(invalid_request("workflow workspace already exists"));
+        }
+        let workspace_id = Uuid::new_v4().to_string();
+        let (checkout_grant, checkout_permissions) = self
+            .workflow_checkout_grant(&parent, &authority, &params, &workspace_id, &checkout)
+            .await?;
+        let common_git_dir = workflow_common_git_dir(current.cwd().as_path()).map_err(|err| {
+            internal_error(format!(
+                "failed to resolve workflow common Git directory: {err}"
+            ))
+        })?;
+        let git_scope = workflow_workspace_permissions::write_scope(vec![
+            AbsolutePathBuf::from_absolute_path(&common_git_dir)
+                .map_err(|error| invalid_request(error.to_string()))?,
+        ]);
+        let base_commit = codex_git_utils::workflow_worktree_base_with(
+            current.cwd().as_path(),
+            role_config.worktree_base_ref,
+            authority
+                .snapshot
+                .permission_profile
+                .network_sandbox_policy(),
+            |args, timeout| {
+                let mut command = vec!["git".to_string()];
+                command.extend(args);
+                let additional = if matches!(command.get(1).map(String::as_str), Some("fetch"))
+                    || command.get(2).map(String::as_str) == Some("set-head")
+                {
+                    git_scope.clone()
+                } else {
+                    Default::default()
+                };
+                let parent = &parent;
+                let workspace_id = &workspace_id;
+                async move {
+                    if timeout.is_zero() {
+                        return Ok(None);
+                    }
+                    match self
+                        .workflow_checkout_command(
+                            parent,
+                            authority.parent_thread_id,
+                            workspace_id,
+                            command,
+                            additional,
+                            timeout,
+                        )
+                        .await
+                    {
+                        Ok(output) => Ok(Some(output)),
+                        Err(error) if error.code == -32010 => Ok(None),
+                        Err(error) => Err(error),
+                    }
+                }
+            },
+        )
+        .await?
+        .ok_or_else(|| {
+            internal_error("failed to resolve workflow base commit under native permission policy")
+        })?;
+        let branch = format!(
+            "ultracode/{}-{}-{}",
+            params.run_id,
+            params.worker_id,
+            &workspace_id[..8]
+        );
+        let operation_scope =
+            workflow_workspace_permissions::checkout_command_scope(&checkout, &common_git_dir)?;
+        let mut ownership = WorkflowWorkspaceOwnership {
+            parent_thread_id: authority.parent_thread_id,
+            authority_ref: params.authority_ref.clone(),
+            authority_digest: params.authority_digest.clone(),
+            run_id: params.run_id.clone(),
+            worker_id: params.worker_id.clone(),
+            cwd: checkout.clone(),
+            base_commit: base_commit.clone(),
+            // This provisional record is used only to clean up a failed creation.
+            // The exact checkout profile is resolved after Git materializes it.
+            permission_profile: current.permission_profile.clone(),
+            released: false,
+            common_git_dir: common_git_dir.clone(),
+            repository_cwd: current.cwd().clone(),
+            branch: branch.clone(),
+            removed: false,
+            checkout_grant: Some(checkout_grant),
+        };
+        let create_result = self
+            .workflow_checkout_command(
+                &parent,
+                authority.parent_thread_id,
+                &workspace_id,
+                vec![
+                    "git".into(),
+                    "worktree".into(),
+                    "add".into(),
+                    "-b".into(),
+                    branch.clone(),
+                    checkout.to_string_lossy().into_owned(),
+                    base_commit.clone(),
+                ],
+                operation_scope.clone(),
+                std::time::Duration::from_secs(30),
+            )
+            .await;
+        if let Err(mut error) = create_result {
+            if matches!(error.code, -32010 | -32011)
+                && let Err(cleanup) = self
+                    .cleanup_workflow_checkout(
+                        &parent,
+                        &workspace_id,
+                        &ownership,
+                        operation_scope.clone(),
+                    )
+                    .await
+            {
+                error.message.push_str(&format!(
+                    "; cleanup unresolved at {}: {}",
+                    checkout.display(),
+                    cleanup.message
+                ));
+            }
+            return Err(error);
+        }
+        if !workflow_worktree_matches(
+            checkout.as_path(),
+            &common_git_dir,
+            &base_commit,
+            Some(&branch),
+        ) {
+            let mut error = internal_error("created workflow worktree failed identity validation");
+            if let Err(cleanup) = self
+                .cleanup_workflow_checkout(&parent, &workspace_id, &ownership, operation_scope)
+                .await
+            {
+                error
+                    .message
+                    .push_str(&format!("; cleanup unresolved: {}", cleanup.message));
+            }
+            return Err(error);
+        }
+        if let Err(mut error) = self
+            .workflow_checkout_command(
+                &parent,
+                authority.parent_thread_id,
+                &workspace_id,
+                vec![
+                    "git".into(),
+                    "worktree".into(),
+                    "lock".into(),
+                    "--reason".into(),
+                    workflow_lock_reason(&workspace_id),
+                    checkout.to_string_lossy().into_owned(),
+                ],
+                operation_scope.clone(),
+                std::time::Duration::from_secs(30),
+            )
+            .await
+        {
+            if let Err(cleanup) = self
+                .cleanup_workflow_checkout(&parent, &workspace_id, &ownership, operation_scope)
+                .await
+            {
+                error.message.push_str(&format!(
+                    "; cleanup unresolved at {}: {}",
+                    checkout.display(),
+                    cleanup.message
+                ));
+            }
+            return Err(error);
+        }
+        match self
+            .materialized_checkout_profile(&parent, &authority, &checkout, checkout_permissions)
+            .await
+        {
+            Ok(profile) => ownership.permission_profile = profile,
+            Err(mut error) => {
+                if let Err(cleanup) = self
+                    .cleanup_workflow_checkout(
+                        &parent,
+                        &workspace_id,
+                        &ownership,
+                        operation_scope.clone(),
+                    )
+                    .await
+                {
+                    error.message.push_str(&format!(
+                        "; cleanup unresolved at {}: {}",
+                        checkout.display(),
+                        cleanup.message
+                    ));
+                }
+                return Err(error);
+            }
+        }
+        if let Err(error) = persist_workflow_workspace(&workspace_id, &ownership) {
+            let mut error =
+                internal_error(format!("failed to persist workflow ownership: {error}"));
+            if let Err(cleanup) = self
+                .cleanup_workflow_checkout(&parent, &workspace_id, &ownership, operation_scope)
+                .await
+            {
+                error.message.push_str(&format!(
+                    "; cleanup unresolved at {}: {}",
+                    checkout.display(),
+                    cleanup.message
+                ));
+            }
+            return Err(error);
+        }
+        self.workflow_workspaces
+            .lock()
+            .await
+            .insert(workspace_id.clone(), ownership);
+        Ok(WorkflowWorkspacePrepareResponse {
+            workspace_id: Some(workspace_id),
+            cwd: checkout.to_string_lossy().into_owned(),
+            isolated: true,
+            base_commit: Some(base_commit),
+            authority_generation: authority.generation,
+            role_digest,
+        })
+    }
+
+    pub(crate) async fn workflow_workspace_release(
+        &self,
+        params: WorkflowWorkspaceReleaseParams,
+    ) -> Result<WorkflowWorkspaceReleaseResponse, JSONRPCErrorError> {
+        let Some(workspace_id) = params.workspace_id.as_ref() else {
+            return Ok(WorkflowWorkspaceReleaseResponse { eligible: true });
+        };
+        validate_workflow_workspace_id(workspace_id)?;
+        let workspace = self
+            .workflow_workspaces
+            .lock()
+            .await
+            .get(workspace_id)
+            .cloned()
+            .ok_or_else(|| invalid_request("workflow workspace is not owned by this host"))?;
+        if workspace
+            .checkout_grant
+            .as_ref()
+            .is_none_or(|grant| !grant.matches(workspace_id, &workspace))
+            || workspace.run_id != params.run_id
+            || workspace.worker_id != params.worker_id
+        {
+            return Err(invalid_request("workflow workspace ownership is stale"));
+        }
+        let worker_thread_id =
+            self.workflow_workers
+                .lock()
+                .await
+                .iter()
+                .find_map(|(thread_id, worker)| {
+                    (worker.parent_thread_id == workspace.parent_thread_id
+                        && worker.run_id == params.run_id
+                        && worker.worker_id == params.worker_id
+                        && worker.workspace_id.as_ref() == Some(workspace_id))
+                    .then_some(*thread_id)
+                });
+        if let Some(thread_id) = worker_thread_id {
+            let thread = self
+                .thread_manager
+                .get_thread(thread_id)
+                .await
+                .map_err(|_| invalid_request("workflow worker state is unavailable"))?;
+            if !workflow_release_eligible(&thread.agent_status().await) {
+                return Ok(WorkflowWorkspaceReleaseResponse { eligible: false });
+            }
+        } else {
+            return Ok(WorkflowWorkspaceReleaseResponse { eligible: false });
+        }
+        let parent = self
+            .thread_manager
+            .get_thread(workspace.parent_thread_id)
+            .await
+            .map_err(|_| invalid_request("workflow parent thread is unavailable"))?;
+        let authority = self
+            .workflow_authorities
+            .lock()
+            .await
+            .get(&workspace.authority_ref)
+            .cloned()
+            .ok_or_else(|| invalid_request("workflow workspace authority is unavailable"))?;
+        if authority.digest != workspace.authority_digest
+            || !workflow_authority_matches(&authority.snapshot, &parent.config_snapshot().await)
+        {
+            return Err(invalid_request(
+                "workflow parent authority changed before checkout release",
+            ));
+        }
+        let scope = workflow_workspace_permissions::checkout_command_scope(
+            &workspace.cwd,
+            &workspace.common_git_dir,
+        )?;
+        if let Some(workspace) = self.workflow_workspaces.lock().await.get_mut(workspace_id) {
+            let identity_matches = workflow_worktree_matches(
+                workspace.cwd.as_path(),
+                &workspace.common_git_dir,
+                &workspace.base_commit,
+                Some(&workspace.branch),
+            );
+            let owned_lock =
+                identity_matches && workflow_owned_lock(workspace.cwd.as_path(), workspace_id);
+            if owned_lock {
+                self.workflow_checkout_command(
+                    &parent,
+                    workspace.parent_thread_id,
+                    workspace_id,
+                    vec![
+                        "git".into(),
+                        "worktree".into(),
+                        "unlock".into(),
+                        workspace.cwd.to_string_lossy().into_owned(),
+                    ],
+                    scope.clone(),
+                    std::time::Duration::from_secs(30),
+                )
+                .await?;
+            }
+            if owned_lock && workflow_workspace_unchanged(workspace) {
+                self.workflow_checkout_command(
+                    &parent,
+                    workspace.parent_thread_id,
+                    workspace_id,
+                    vec![
+                        "git".into(),
+                        "worktree".into(),
+                        "remove".into(),
+                        workspace.cwd.to_string_lossy().into_owned(),
+                    ],
+                    scope.clone(),
+                    std::time::Duration::from_secs(30),
+                )
+                .await?;
+                workspace.removed = true;
+                persist_workflow_workspace(workspace_id, workspace).map_err(internal_error)?;
+                self.workflow_checkout_command(
+                    &parent,
+                    workspace.parent_thread_id,
+                    workspace_id,
+                    vec![
+                        "git".into(),
+                        "update-ref".into(),
+                        "-d".into(),
+                        format!("refs/heads/{}", workspace.branch),
+                        workspace.base_commit.clone(),
+                    ],
+                    scope,
+                    std::time::Duration::from_secs(30),
+                )
+                .await?;
+            }
+            workflow_release_lease(workspace);
+            persist_workflow_workspace(workspace_id, workspace).map_err(internal_error)?;
+        }
+        Ok(WorkflowWorkspaceReleaseResponse { eligible: true })
+    }
+
+    pub(crate) async fn workflow_worker_start(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: WorkflowWorkerStartParams,
+    ) -> Result<WorkflowWorkerStartResponse, JSONRPCErrorError> {
+        if params.prompt.trim().is_empty() {
+            return Err(invalid_request("workflow worker prompt must not be empty"));
+        }
+        if params
+            .schema
+            .as_ref()
+            .is_some_and(|schema| !schema.is_object())
+        {
+            return Err(invalid_request("workflow worker schema must be an object"));
+        }
+        let role_instructions = match params.agent_type.as_str() {
+            "general-purpose" => "",
+            "Explore" => {
+                "Role: Explore. Inspect and report only. Do not modify files or external state."
+            }
+            "Plan" => {
+                "Role: Plan. Produce an implementation plan only. Do not modify files or external state."
+            }
+            _ => "",
+        };
+        let (parent_thread_id, parent) = self.load_thread(&params.parent_thread_id).await?;
+        let authority = self
+            .workflow_authorities
+            .lock()
+            .await
+            .get(&params.authority_ref)
+            .cloned()
+            .ok_or_else(|| invalid_request("workflow authority reference is unknown"))?;
+        if !workflow_authority_ref_matches(
+            authority.parent_thread_id,
+            authority.generation,
+            parent_thread_id,
+            params.authority_generation,
+        ) || authority.digest != params.authority_digest
+        {
+            return Err(invalid_request("workflow authority reference is stale"));
+        }
+        let current = parent.config_snapshot().await;
+        if !workflow_authority_matches(&authority.snapshot, &current) {
+            return Err(invalid_request("workflow parent authority changed"));
+        }
+        let isolated_workspace = if let Some(workspace_id) = params.workspace.workspace_id.as_ref()
+        {
+            validate_workflow_workspace_id(workspace_id)?;
+            let mut workspaces = self.workflow_workspaces.lock().await;
+            let workspace = workspaces
+                .get_mut(workspace_id)
+                .ok_or_else(|| invalid_request("workflow workspace is not owned by this host"))?;
+            if workspace
+                .checkout_grant
+                .as_ref()
+                .is_none_or(|grant| !grant.matches(workspace_id, workspace))
+                || workspace.parent_thread_id != parent_thread_id
+                || workspace.authority_ref != params.authority_ref
+                || workspace.authority_digest != params.authority_digest
+                || workspace.run_id != params.run_id
+                || workspace.worker_id != params.worker_id
+                || params.workspace.cwd != workspace.cwd.to_string_lossy()
+                || params.workspace.base_commit.as_ref() != Some(&workspace.base_commit)
+                || !params.workspace.isolated
+                || workspace.released
+                || (!workspace.removed
+                    && !workflow_worktree_matches(
+                        workspace.cwd.as_path(),
+                        &workspace.common_git_dir,
+                        &workspace.base_commit,
+                        Some(&workspace.branch),
+                    ))
+            {
+                return Err(invalid_request("workflow workspace ownership is stale"));
+            }
+            if workspace.removed {
+                self.restore_workflow_checkout(&parent, workspace_id, workspace)
+                    .await?;
+                persist_workflow_workspace(workspace_id, workspace).map_err(|e| {
+                    internal_error(format!("failed to persist restored workflow worktree: {e}"))
+                })?;
+            }
+            Some(workspace.clone())
+        } else {
+            if params.workspace.isolated
+                || params.workspace.cwd != current.cwd().to_string_lossy()
+                || params.workspace.base_commit.is_some()
+            {
+                return Err(invalid_request("workflow shared workspace is invalid"));
+            }
+            None
+        };
+        if current.model_provider_id != "openai" {
+            return Err(invalid_request(
+                "workflow workers require the OpenAI Codex model provider",
+            ));
+        }
+
+        let force_read_only =
+            params.read_only || matches!(params.agent_type.as_str(), "Explore" | "Plan");
+        let schema_digest = workflow_schema_digest(params.schema.as_ref());
+        let workspace_permission_profile = isolated_workspace.as_ref().map_or_else(
+            || current.permission_profile.clone(),
+            |workspace| workspace.permission_profile.clone(),
+        );
+        let permission_profile = if force_read_only {
+            workspace_permission_profile
+                .intersect_with_read_only()
+                .ok_or_else(|| {
+                    invalid_request("external sandbox authority cannot be reduced safely")
+                })?
+        } else {
+            workspace_permission_profile
+        };
+        let permission_snapshot = match current.active_permission_profile.clone() {
+            Some(active)
+                if isolated_workspace.is_none()
+                    && permission_profile == current.permission_profile =>
+            {
+                PermissionProfileSnapshot::active_with_profile_workspace_roots(
+                    permission_profile,
+                    active,
+                    current.profile_workspace_roots.clone(),
+                )
+            }
+            _ => PermissionProfileSnapshot::legacy(permission_profile),
+        };
+
+        let mut config = parent.effective_config().await.as_ref().clone();
+        config.service_tier.clone_from(&current.service_tier);
+        config.model = Some(current.model.clone());
+        config
+            .model_reasoning_effort
+            .clone_from(&current.reasoning_effort);
+        let role_digest = workflow_apply_role(&mut config, &params.agent_type)
+            .await
+            .map_err(invalid_request)?;
+        if role_digest != params.role_digest {
+            return Err(invalid_request(
+                "workflow worker role changed after preparation",
+            ));
+        }
+        config.model = workflow_effective_selection(
+            Some(current.model.clone()),
+            config.model.take(),
+            params.model.clone(),
+            params.model_explicit,
+        );
+        config.model_reasoning_effort = workflow_effective_selection(
+            current.reasoning_effort.clone(),
+            config.model_reasoning_effort.take(),
+            params.effort.clone(),
+            params.effort_explicit,
+        );
+        let effective_model = config
+            .model
+            .clone()
+            .ok_or_else(|| invalid_request("workflow worker model is unavailable"))?;
+        let available_models = self
+            .thread_manager
+            .get_models_manager()
+            .list_models(
+                codex_models_manager::manager::RefreshStrategy::Offline,
+                self.config.http_client_factory(),
+            )
+            .await;
+        let model = available_models
+            .iter()
+            .find(|preset| preset.model == effective_model)
+            .ok_or_else(|| invalid_request("workflow worker model is unavailable"))?;
+        let effective_effort = config
+            .model_reasoning_effort
+            .clone()
+            .unwrap_or_else(|| model.default_reasoning_effort.clone());
+        if !model
+            .supported_reasoning_efforts
+            .iter()
+            .any(|preset| preset.effort == effective_effort)
+        {
+            return Err(invalid_request(
+                "workflow worker effort is unsupported by the selected model",
+            ));
+        }
+        config.model = Some(effective_model.clone());
+        config.model_reasoning_effort = Some(effective_effort.clone());
+        config.cwd = isolated_workspace
+            .as_ref()
+            .map_or_else(|| current.cwd().clone(), |workspace| workspace.cwd.clone());
+        config
+            .permissions
+            .set_workspace_roots(if isolated_workspace.is_some() {
+                vec![config.cwd.clone()]
+            } else {
+                current.workspace_roots.clone()
+            });
+        config
+            .permissions
+            .replace_permission_profile_from_session_snapshot(permission_snapshot)
+            .map_err(|err| {
+                invalid_request(format!("workflow permission profile is invalid: {err}"))
+            })?;
+        config
+            .permissions
+            .approval_policy
+            .set(current.approval_policy)
+            .map_err(|err| {
+                invalid_request(format!("workflow approval policy is invalid: {err}"))
+            })?;
+        config.approvals_reviewer = current.approvals_reviewer;
+
+        if config.model_provider_id != current.model_provider_id {
+            config.model_provider = config
+                .model_providers
+                .get(&current.model_provider_id)
+                .cloned()
+                .ok_or_else(|| invalid_request("workflow parent model provider is unavailable"))?;
+            config
+                .model_provider_id
+                .clone_from(&current.model_provider_id);
+        }
+
+        let prompt = [
+            "Do not launch sub-agents or delegate work. Complete only this workflow worker turn.",
+            role_instructions,
+            params.prompt.as_str(),
+        ]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+        let trace = self.request_trace_context(request_id).await;
+        let AgentRun {
+            thread_id,
+            turn_id,
+            thread,
+        } = if let Some(resume_thread_id) = params.resume_thread_id.as_ref() {
+            let (thread_id, thread) = self.load_thread(resume_thread_id).await?;
+            let child_snapshot = thread.config_snapshot().await;
+            let mut workers = self.workflow_workers.lock().await;
+            let ownership = workers.get_mut(&thread_id).ok_or_else(|| {
+                invalid_request("workflow worker thread is not owned by this host")
+            })?;
+            if ownership.parent_thread_id != parent_thread_id
+                || ownership.authority_digest != params.authority_digest
+                || ownership.run_id != params.run_id
+                || ownership.worker_id != params.worker_id
+                || ownership.launch_intent
+                || ownership.read_only != force_read_only
+                || ownership.agent_type != params.agent_type
+                || ownership.schema_digest != schema_digest
+                || ownership.workspace_id != params.workspace.workspace_id
+                || ownership.cwd.to_string_lossy() != params.workspace.cwd
+                || ownership.role_digest != role_digest
+                || child_snapshot.parent_thread_id != Some(parent_thread_id)
+                || child_snapshot.model != effective_model
+                || child_snapshot.reasoning_effort.as_ref() != Some(&effective_effort)
+            {
+                return Err(invalid_request("workflow worker resume lineage is invalid"));
+            }
+            ownership.launch_intent = true;
+            drop(workers);
+            let result = self
+                .agent_runner
+                .resume(thread, prompt, params.schema.clone(), trace)
+                .await;
+            if let Some(worker) = self.workflow_workers.lock().await.get_mut(&thread_id) {
+                worker.launch_intent = false;
+            }
+            result
+        } else {
+            let reserved_thread_id = ThreadId::new();
+            let mut workers = self.workflow_workers.lock().await;
+            if workers.values().any(|worker| {
+                worker.run_id == params.run_id && worker.worker_id == params.worker_id
+            }) {
+                return Err(invalid_request("workflow worker launch is already owned"));
+            }
+            workers.insert(
+                reserved_thread_id,
+                WorkflowWorkerOwnership {
+                    parent_thread_id,
+                    authority_digest: params.authority_digest.clone(),
+                    run_id: params.run_id.clone(),
+                    worker_id: params.worker_id.clone(),
+                    launch_intent: true,
+                    read_only: force_read_only,
+                    agent_type: params.agent_type.clone(),
+                    schema_digest,
+                    workspace_id: params.workspace.workspace_id.clone(),
+                    cwd: config.cwd.clone(),
+                    role_digest,
+                },
+            );
+            drop(workers);
+            let result = self
+                .agent_runner
+                .start(
+                    parent_thread_id,
+                    AgentInvocation {
+                        config,
+                        prompt,
+                        parent_trace: trace,
+                        output_schema: params.schema.clone(),
+                        reserved_thread_id: Some(reserved_thread_id),
+                        thread_source: Some(ThreadSource::Feature("ultracode-worker".to_string())),
+                        start_gate: Some({
+                            let (attached_tx, attached_rx) = tokio::sync::oneshot::channel();
+                            let listener_task_context = self.listener_task_context();
+                            let connection_id = request_id.connection_id;
+                            tokio::spawn(async move {
+                                for _ in 0..5_000 {
+                                    if listener_task_context
+                                        .thread_manager
+                                        .get_thread(reserved_thread_id)
+                                        .await
+                                        .is_ok()
+                                    {
+                                        if matches!(
+                                            super::thread_lifecycle::ensure_conversation_listener(
+                                                listener_task_context,
+                                                reserved_thread_id,
+                                                connection_id,
+                                                false,
+                                            )
+                                            .await,
+                                            Ok(EnsureConversationListenerResult::Attached)
+                                        ) {
+                                            let _ = attached_tx.send(());
+                                        }
+                                        return;
+                                    }
+                                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                                }
+                            });
+                            attached_rx
+                        }),
+                    },
+                )
+                .await;
+            match result {
+                Ok(run) => {
+                    if let Some(worker) = self
+                        .workflow_workers
+                        .lock()
+                        .await
+                        .get_mut(&reserved_thread_id)
+                    {
+                        worker.launch_intent = false;
+                    }
+                    Ok(run)
+                }
+                Err(err) => {
+                    // The reserved child may already exist if initial turn submission failed.
+                    // Retain launch intent so retries cannot duplicate an uncertain launch.
+                    Err(err)
+                }
+            }
+        }
+        .map_err(|err| internal_error(format!("failed to start workflow worker: {err}")))?;
+        let session_id = thread.session_configured().session_id.to_string();
+        Ok(WorkflowWorkerStartResponse {
+            thread_id: thread_id.to_string(),
+            session_id,
+            turn_id,
+            model: effective_model,
+            effort: effective_effort,
+        })
     }
 
     pub(crate) async fn turn_start(
@@ -1449,6 +3510,10 @@ impl TurnRequestProcessor {
                     config,
                     prompt: prompt.to_string(),
                     parent_trace: self.request_trace_context(request_id).await,
+                    output_schema: None,
+                    reserved_thread_id: None,
+                    thread_source: None,
+                    start_gate: None,
                 },
             )
             .await
@@ -1663,3 +3728,55 @@ fn xcode_26_4_mcp_elicitations_auto_deny(
     client_name == Some("Xcode")
         && client_version.is_some_and(|version| version.starts_with("26.4"))
 }
+
+#[cfg(test)]
+mod workflow_selection_tests {
+    use super::workflow_effective_selection;
+
+    #[test]
+    fn explicit_worker_selection_overrides_role_while_omitted_preserves_it() {
+        assert_eq!(
+            workflow_effective_selection(
+                Some("gpt-5.6-sol"),
+                Some("gpt-5.6-luna"),
+                "ignored",
+                false,
+            ),
+            Some("gpt-5.6-luna")
+        );
+        assert_eq!(
+            workflow_effective_selection(
+                Some("gpt-5.6-sol"),
+                Some("gpt-5.6-luna"),
+                "gpt-5.6-sol",
+                true,
+            ),
+            Some("gpt-5.6-sol")
+        );
+        assert_eq!(
+            workflow_effective_selection(Some("medium"), Some("low"), "high", false),
+            Some("low")
+        );
+        assert_eq!(
+            workflow_effective_selection(Some("medium"), Some("low"), "high", true),
+            Some("high")
+        );
+    }
+}
+
+fn workflow_completion_response(
+    submission: TurnInputSubmission,
+) -> Result<WorkflowCompletionInjectResponse, JSONRPCErrorError> {
+    match submission {
+        TurnInputSubmission::Started { turn_id } | TurnInputSubmission::Steered { turn_id } => {
+            Ok(WorkflowCompletionInjectResponse { turn_id })
+        }
+        TurnInputSubmission::NotSubmitted { reason } => Err(internal_error(format!(
+            "workflow completion was not submitted: {reason:?}"
+        ))),
+    }
+}
+
+#[cfg(test)]
+#[path = "workflow_completion_tests.rs"]
+mod workflow_completion_tests;

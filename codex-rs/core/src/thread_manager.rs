@@ -1002,17 +1002,40 @@ impl ThreadManager {
         // Persist queued rollout updates before reading the fork snapshot.
         fork_source.ensure_rollout_materialized().await;
         fork_source.flush_rollout().await?;
-        let stored_thread = fork_source
-            .read_thread(
-                /*include_archived*/ true, /*include_history*/ true,
-            )
-            .await
-            .map_err(|err| {
-                CodexErr::Fatal(format!(
-                    "failed to read subagent fork source {forked_from_thread_id}: {err}"
-                ))
-            })?;
-        let history = stored_thread_to_initial_history(stored_thread, fork_source.rollout_path())?;
+        let history = match fork_source.config_snapshot().await.history_mode {
+            ThreadHistoryMode::Legacy => {
+                let stored_thread = fork_source
+                    .read_thread(
+                        /*include_archived*/ true, /*include_history*/ true,
+                    )
+                    .await
+                    .map_err(|err| {
+                        CodexErr::Fatal(format!(
+                            "failed to read subagent fork source {forked_from_thread_id}: {err}"
+                        ))
+                    })?;
+                stored_thread_to_initial_history(stored_thread, fork_source.rollout_path())?
+            }
+            ThreadHistoryMode::Paginated => {
+                let model_context = self
+                    .state
+                    .load_latest_model_context(LoadThreadHistoryParams {
+                        thread_id: forked_from_thread_id,
+                        include_archived: true,
+                    })
+                    .await
+                    .map_err(|err| {
+                        CodexErr::Fatal(format!(
+                            "failed to read subagent fork source {forked_from_thread_id}: {err}"
+                        ))
+                    })?;
+                InitialHistory::Resumed(ResumedHistory {
+                    conversation_id: forked_from_thread_id,
+                    history: Arc::new(model_context.items),
+                    rollout_path: None,
+                })
+            }
+        };
         let inherited_multi_agent_version = fork_source
             .multi_agent_version()
             .unwrap_or(MultiAgentVersion::V1);

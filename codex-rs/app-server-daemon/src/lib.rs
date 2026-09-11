@@ -4,6 +4,9 @@ mod managed_install;
 mod remote_control_client;
 mod settings;
 mod update_loop;
+mod workflow_backend;
+pub use workflow_backend::ensure_workflow_backend;
+pub use workflow_backend::workflow_backend_socket_path;
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -252,6 +255,8 @@ fn ensure_supported_platform() -> Result<()> {
 
 struct Daemon {
     socket_path: PathBuf,
+    backend_socket_path: Option<PathBuf>,
+    backend_codex_home: Option<PathBuf>,
     pid_file: PathBuf,
     update_pid_file: PathBuf,
     operation_lock_file: PathBuf,
@@ -268,6 +273,8 @@ impl Daemon {
         let state_dir = codex_home.as_path().join(STATE_DIR_NAME);
         Ok(Self {
             socket_path,
+            backend_socket_path: None,
+            backend_codex_home: None,
             pid_file: state_dir.join(PID_FILE_NAME),
             update_pid_file: state_dir.join(UPDATE_PID_FILE_NAME),
             operation_lock_file: state_dir.join(OPERATION_LOCK_FILE_NAME),
@@ -700,6 +707,8 @@ impl Daemon {
     ) -> BackendPaths {
         BackendPaths {
             codex_bin: managed_codex_bin.to_path_buf(),
+            socket_path: self.backend_socket_path.clone(),
+            codex_home: self.backend_codex_home.clone(),
             pid_file: self.pid_file.clone(),
             update_pid_file: self.update_pid_file.clone(),
             remote_control_enabled: settings.remote_control_enabled,
@@ -1011,6 +1020,8 @@ mod tests {
         let temp_dir = TempDir::new().expect("temp dir");
         let daemon = Daemon {
             socket_path: temp_dir.path().join("app-server-control.sock"),
+            backend_socket_path: None,
+            backend_codex_home: None,
             pid_file: temp_dir.path().join("app-server.pid"),
             update_pid_file: temp_dir.path().join("app-server-updater.pid"),
             operation_lock_file: temp_dir.path().join("daemon.lock"),

@@ -1284,6 +1284,7 @@ async fn submit_user_message_emits_structured_plugin_mentions_from_bindings() {
         }]));
 
     chat.submit_user_message(UserMessage {
+        workflow_keyword: None,
         text: "$sample".to_string(),
         local_images: Vec::new(),
         remote_image_urls: Vec::new(),

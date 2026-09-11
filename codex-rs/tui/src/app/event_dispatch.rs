@@ -62,6 +62,11 @@ impl App {
         }
 
         match event {
+            AppEvent::Workflow(event) => {
+                let request_id=match &event { crate::app_event::WorkflowEvent::ToolCall{request_id,..}|crate::app_event::WorkflowEvent::Consent{request_id,..}=>Some(request_id.clone()),_=>None };
+                let catalog=matches!(&event,crate::app_event::WorkflowEvent::LoadCatalog{..});
+                if let Err(error)=Box::pin(self.handle_workflow_event(tui,app_server,event)).await { if let Some(request_id)=request_id { self.app_event_tx.send(AppEvent::DynamicToolCallCompleted { request_id,response:crate::dynamic_tools::failure_response(error.to_string()) }); } else if catalog { tracing::warn!(%error,"unable to load workflow catalog"); } else { return Err(error); } }
+            }
             AppEvent::SkillsListLoaded { ref cwd, .. }
             | AppEvent::PluginMentionsLoaded { ref cwd, .. }
                 if cwds_differ(cwd, self.config.cwd.as_path()) => {}
@@ -652,9 +657,23 @@ impl App {
             }
             AppEvent::RunningTaskExit { action, thread_id } => match action {
                 RunningTaskExitAction::RunInBackground => {
+                    let parents: Vec<_> = self.workflow_sessions.iter().map(|(id, session)| (id.clone(), session.bridge.clone())).collect();
+                    if let Err(error) = crate::ultracode_bridge::detach_all(&parents).await {
+                        self.chat_widget.add_error_message(format!("Unable to detach workflows: {error}"));
+                        return Ok(AppRunControl::Continue);
+                    }
                     return Ok(self.handle_exit_mode(app_server, ExitMode::Immediate).await);
                 }
                 RunningTaskExitAction::CancelTask => {
+                    for session in self.workflow_sessions.values().filter(|session| session.active_runs) {
+                        if let Ok(snapshot) = session.bridge.list_runs().await {
+                            for run in snapshot["runs"].as_array().into_iter().flatten().filter(|run| !matches!(run["status"].as_str(), Some("completed" | "failed" | "stopped" | "interrupted"))) {
+                                if let Err(error) = session.bridge.request("stopRun", serde_json::json!({"runId":run["id"]}), std::time::Duration::from_secs(30)).await {
+                                    self.chat_widget.add_error_message(format!("Unable to stop workflow: {error}"));
+                                }
+                            }
+                        }
+                    }
                     if self.chat_widget.thread_id() == Some(thread_id)
                         && self.chat_widget.is_agent_turn_running()
                         && self.chat_widget.submit_op(AppCommand::interrupt())
@@ -2253,6 +2272,27 @@ impl App {
                     }
                 }
             }
+            AppEvent::PersistWorkflowSizeGuideline { guideline } => {
+                self.config.workflow_size_guideline = Some(guideline);
+                self.chat_widget.set_workflow_size_guideline(guideline);
+                match crate::config_update::write_config_batch(
+                    app_server.request_handle(),
+                    vec![crate::config_update::replace_config_value(
+                        "workflow_size_guideline",
+                        serde_json::json!(guideline.to_string()),
+                    )],
+                )
+                .await
+                {
+                    Ok(_) => self.chat_widget.add_info_message(
+                        format!("Dynamic workflow size set to {guideline}"),
+                        None,
+                    ),
+                    Err(err) => self.chat_widget.add_error_message(format!(
+                        "Failed to save dynamic workflow size: {err}"
+                    )),
+                }
+            }
             AppEvent::PersistServiceTierSelection { service_tier } => {
                 self.refresh_status_line();
                 self.config.service_tier = service_tier.clone();
@@ -3174,6 +3214,16 @@ impl App {
         app_server: &mut AppServerSession,
         mode: ExitMode,
     ) -> AppRunControl {
+        if matches!(
+            mode,
+            ExitMode::ShutdownFirst | ExitMode::ShutdownAfterInterrupt
+        ) {
+            for session in self.workflow_sessions.values() {
+                if let Err(error) = session.bridge.shutdown().await {
+                    tracing::warn!(%error, "workflow shutdown did not acknowledge completion");
+                }
+            }
+        }
         for (request_id, (_, task)) in self.dynamic_tool_tasks.drain() {
             task.abort();
             let response = crate::dynamic_tools::failure_response(

@@ -189,7 +189,10 @@ async fn file_system_write_file_writes_bytes(
         .write_file(
             &PathUri::from_host_native_path(&file_path)?,
             b"hello from trait".to_vec(),
-            WriteFileOptions { follow_symlinks },
+            WriteFileOptions {
+                follow_symlinks,
+                create_new: false,
+            },
             sandbox.as_ref(),
         )
         .await;
@@ -206,12 +209,56 @@ async fn file_system_write_file_writes_bytes(
         .write_file(
             &PathUri::from_host_native_path(&file_path)?,
             b"after".to_vec(),
-            WriteFileOptions { follow_symlinks },
+            WriteFileOptions {
+                follow_symlinks,
+                create_new: false,
+            },
             sandbox.as_ref(),
         )
         .await
         .with_context(|| format!("mode={implementation}, sandboxed={sandboxed}"))?;
     assert_eq!(std::fs::read(file_path)?, b"after");
+
+    let existing = root.join("create-new-existing.txt");
+    std::fs::write(&existing, b"preserve")?;
+    assert!(
+        file_system
+            .write_file(
+                &PathUri::from_host_native_path(&existing)?,
+                b"replace".to_vec(),
+                WriteFileOptions {
+                    follow_symlinks: false,
+                    create_new: true,
+                },
+                sandbox.as_ref(),
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(std::fs::read(existing)?, b"preserve");
+
+    #[cfg(unix)]
+    {
+        let target = root.join("create-new-target.txt");
+        let link = root.join("create-new-link.txt");
+        std::fs::write(&target, b"target")?;
+        std::os::unix::fs::symlink(&target, &link)?;
+        assert!(
+            file_system
+                .write_file(
+                    &PathUri::from_host_native_path(&link)?,
+                    b"replace".to_vec(),
+                    WriteFileOptions {
+                        follow_symlinks: false,
+                        create_new: true,
+                    },
+                    sandbox.as_ref(),
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(std::fs::read(target)?, b"target");
+    }
 
     Ok(())
 }

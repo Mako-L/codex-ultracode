@@ -71,6 +71,27 @@ pub enum ReasoningSummary {
     None,
 }
 
+/// Advisory target for the number of agents in a dynamically authored workflow.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+#[ts(export_to = "v2/")]
+pub enum WorkflowSizeGuideline {
+    Unrestricted,
+    Small,
+    Medium,
+    Large,
+}
+
+/// Starting reference for isolated workflow worktrees.
+#[derive(Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum WorktreeBaseRef {
+    #[default]
+    Fresh,
+    Head,
+}
+
 /// Controls output length/detail on GPT-5 models via the Responses API.
 /// Serialized with lowercase values to match the OpenAI API.
 #[derive(

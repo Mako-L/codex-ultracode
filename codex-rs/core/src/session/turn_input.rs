@@ -209,6 +209,7 @@ pub(super) async fn handle(
                 }
                 SubmittedTurnInput::UserInput { .. }
                 | SubmittedTurnInput::ResponseItem(_)
+                | SubmittedTurnInput::WorkflowCompletion { .. }
                 | SubmittedTurnInput::InterAgentCommunication(_) => TurnStartKind::Automatic,
             };
             start_if_idle(session, request, submission_id, kind).await
@@ -252,10 +253,11 @@ async fn start_or_steer(
         SubmittedTurnInput::ResponseItem(ResponseItem::FunctionCallOutput {
             call_id: None,
             ..
-        }) => true,
+        })
+        | SubmittedTurnInput::WorkflowCompletion { .. } => true,
         _ => {
             return Err(CodexErr::InvalidRequest(
-                "only user input or standalone function-call outputs can start or steer a turn"
+                "only user input, workflow completions, or standalone function-call outputs can start or steer a turn"
                     .to_string(),
             ));
         }
@@ -676,6 +678,12 @@ fn pending_turn_input(input: SubmittedTurnInput) -> TurnInput {
             TurnInput::FunctionCallOutput(item)
         }
         SubmittedTurnInput::ResponseItem(item) => TurnInput::ResponseItem(item.into()),
+        SubmittedTurnInput::WorkflowCompletion { run_id, summary } => {
+            let item = crate::context::ContextualUserFragment::into(
+                crate::context::WorkflowCompletion::new(run_id, summary),
+            );
+            TurnInput::ResponseItem(item.into())
+        }
         SubmittedTurnInput::InterAgentCommunication(communication) => {
             TurnInput::InterAgentCommunication(communication)
         }

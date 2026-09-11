@@ -1,0 +1,25 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "authorityDigest": {
+      "type": "string"
+    },
+    "authorityRef": {
+      "type": "string"
+    },
+    "parentThreadId": {
+      "type": "string"
+    },
+    "scriptPath": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "authorityDigest",
+    "authorityRef",
+    "parentThreadId",
+    "scriptPath"
+  ],
+  "title": "WorkflowScriptReadParams",
+  "type": "object"
+}

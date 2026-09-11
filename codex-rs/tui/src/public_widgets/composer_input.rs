@@ -38,13 +38,14 @@ impl ComposerInput {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let sender = AppEventSender::new(tx.clone());
         // `enhanced_keys_supported=true` enables Shift+Enter newline hint/behavior.
-        let inner = ChatComposer::new(
+        let mut inner = ChatComposer::new(
             /*has_input_focus*/ true,
             sender,
             /*enhanced_keys_supported*/ true,
             "Compose new task".to_string(),
             /*disable_paste_burst*/ false,
         );
+        inner.set_workflow_keyword_enabled(false);
         Self { inner, _tx: tx, rx }
     }
 
@@ -68,6 +69,7 @@ impl ComposerInput {
                 text_elements,
                 action: QueuedInputAction::Literal,
                 pending_pastes,
+                ..
             } => ComposerAction::Submitted(
                 ChatComposer::expand_pending_pastes(&text, text_elements, &pending_pastes).0,
             ),

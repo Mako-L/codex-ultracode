@@ -41,6 +41,9 @@ pub enum SlashCommand {
     Recap,
     Plan,
     Goal,
+    Workflows,
+    Effort,
+    Config,
     Agents,
     Side,
     Btw,
@@ -129,6 +132,9 @@ impl SlashCommand {
             SlashCommand::Personality => "choose a communication style for Codex",
             SlashCommand::Plan => "switch to Plan mode",
             SlashCommand::Goal => "set or view the goal for a long-running task",
+            SlashCommand::Workflows => "view and control Ultracode workflows",
+            SlashCommand::Effort => "configure Ultracode workflow effort",
+            SlashCommand::Config => "configure dynamic workflow size",
             SlashCommand::Agents => "view and switch between all active agent sessions",
             SlashCommand::MultiAgents => "switch between this session's subagents",
             SlashCommand::Side | SlashCommand::Btw => {
@@ -170,6 +176,8 @@ impl SlashCommand {
                 | SlashCommand::Fork
                 | SlashCommand::Plan
                 | SlashCommand::Goal
+                | SlashCommand::Effort
+                | SlashCommand::Config
                 | SlashCommand::Ide
                 | SlashCommand::Keymap
                 | SlashCommand::Mcp
@@ -219,6 +227,7 @@ impl SlashCommand {
             | SlashCommand::ElevateSandbox
             | SlashCommand::SandboxReadRoot
             | SlashCommand::Experimental
+            | SlashCommand::Config
             | SlashCommand::Memories
             | SlashCommand::Import
             | SlashCommand::Review
@@ -247,6 +256,8 @@ impl SlashCommand {
             | SlashCommand::Stop
             | SlashCommand::App
             | SlashCommand::Goal
+            | SlashCommand::Workflows
+            | SlashCommand::Effort
             | SlashCommand::Mcp
             | SlashCommand::Apps
             | SlashCommand::Plugins

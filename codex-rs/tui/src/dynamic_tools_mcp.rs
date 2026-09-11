@@ -42,6 +42,8 @@ use serde_json::Value;
 use serde_json::json;
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::PoisonError;
 use std::sync::RwLock;
@@ -53,6 +55,8 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub(crate) enum ThreadToolTransport {
     Disabled,
+    Workflow,
+    Tasks,
     Dynamic,
     Mcp(Arc<DynamicToolMcpServer>),
 }
@@ -61,6 +65,12 @@ impl ThreadToolTransport {
     pub(crate) fn configure(&self, params: &mut ThreadStartParams) {
         match self {
             Self::Disabled => params.dynamic_tools = None,
+            Self::Workflow => {
+                params.dynamic_tools = Some(dynamic_tools::workflow_tool_specs());
+            }
+            Self::Tasks => {
+                params.dynamic_tools = Some(dynamic_tools::non_delegation_task_tool_specs());
+            }
             Self::Dynamic => {
                 params.dynamic_tools = Some(dynamic_tools::non_delegation_tool_specs());
             }
@@ -83,13 +93,64 @@ impl ThreadToolTransport {
 
 type ToolConnection = Arc<RwLock<Option<(AppServerRequestHandle, AppEventSender)>>>;
 
+pub(crate) trait WorkflowMcpHandler: Send + Sync {
+    fn call(
+        &self,
+        params: DynamicToolCallParams,
+    ) -> Pin<Box<dyn Future<Output = codex_app_server_protocol::DynamicToolCallResponse> + Send>>;
+}
+
 pub(crate) struct DynamicToolMcpServer {
     connection: ToolConnection,
     config: Value,
     task: JoinHandle<()>,
+    pub(crate) supervisor: Option<crate::ultracode_bridge::UltracodeBridge>,
 }
 
 impl DynamicToolMcpServer {
+    pub(crate) fn configuration(&self) -> Value {
+        self.config.clone()
+    }
+
+    #[cfg(unix)]
+    pub(crate) async fn connect_supervisor(
+        home: &std::path::Path,
+        request_handle: AppServerRequestHandle,
+        thread_start_params: ThreadStartParams,
+        events: AppEventSender,
+        managed_requirement: Option<&McpServerRequirement>,
+    ) -> std::io::Result<Self> {
+        let supervisor = crate::ultracode_host::connect(home).await?;
+        let plugin_root = std::env::var_os("ULTRACODE_PLUGIN_ROOT")
+            .or_else(|| std::env::var_os("CODEX_PLUGIN_ROOT"))
+            .ok_or_else(|| std::io::Error::other("frontend plugin root is unavailable"))?;
+        let plugin_root = std::path::PathBuf::from(plugin_root).canonicalize()?;
+        let config = supervisor
+            .request(
+                "configure",
+                json!({"threadStartParams":thread_start_params,"pluginRoot":plugin_root}),
+                std::time::Duration::from_secs(30),
+            )
+            .await
+            .map_err(std::io::Error::other)?;
+        if let Some(requirement) = managed_requirement {
+            let raw: RawMcpServerConfig = serde_json::from_value(config.clone())?;
+            let configured = McpServerConfig::try_from(raw).map_err(std::io::Error::other)?;
+            if !configured.matches_requirement(requirement) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "managed MCP requirements do not permit the native workflow host",
+                ));
+            }
+        }
+        Ok(Self {
+            connection: Arc::new(RwLock::new(Some((request_handle, events)))),
+            config,
+            task: tokio::spawn(async {}),
+            supervisor: Some(supervisor),
+        })
+    }
+
     pub(crate) fn suspend(&self) {
         *self
             .connection
@@ -110,6 +171,8 @@ impl DynamicToolMcpServer {
         app_event_tx: AppEventSender,
         status_updates: broadcast::Sender<ThreadStatusChangedNotification>,
         managed_requirement: Option<&McpServerRequirement>,
+        workflow_handler: Option<Arc<dyn WorkflowMcpHandler>>,
+        workflows_enabled: bool,
     ) -> std::io::Result<Self> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let address = listener.local_addr()?;
@@ -147,6 +210,8 @@ impl DynamicToolMcpServer {
             thread_start_params,
             status_updates,
             server_config: server_config.clone(),
+            workflow_handler,
+            workflows_enabled,
         };
         let service = StreamableHttpService::new(
             move || Ok(handler.clone()),
@@ -169,6 +234,7 @@ impl DynamicToolMcpServer {
             connection,
             config: server_config,
             task,
+            supervisor: None,
         })
     }
 }
@@ -201,6 +267,8 @@ struct DynamicToolMcpHandler {
     thread_start_params: ThreadStartParams,
     status_updates: broadcast::Sender<ThreadStatusChangedNotification>,
     server_config: Value,
+    workflow_handler: Option<Arc<dyn WorkflowMcpHandler>>,
+    workflows_enabled: bool,
 }
 
 impl ServerHandler for DynamicToolMcpHandler {
@@ -214,7 +282,12 @@ impl ServerHandler for DynamicToolMcpHandler {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
         let mut tools = Vec::new();
-        for spec in dynamic_tools::tool_specs() {
+        let specs = if self.workflows_enabled {
+            dynamic_tools::tool_specs()
+        } else {
+            dynamic_tools::task_tool_specs()
+        };
+        for spec in specs {
             let functions = match spec {
                 DynamicToolSpec::Function(function) => vec![function],
                 DynamicToolSpec::Namespace(namespace) => namespace
@@ -248,6 +321,12 @@ impl ServerHandler for DynamicToolMcpHandler {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<rmcp::model::CallToolResponse, McpError> {
+        if !self.workflows_enabled && request.name == "workflow" {
+            return Err(McpError::invalid_params(
+                "workflow tools are disabled",
+                None,
+            ));
+        }
         let metadata = &context.meta.0.0;
         let turn_metadata = metadata
             .get("x-codex-turn-metadata")
@@ -279,6 +358,12 @@ impl ServerHandler for DynamicToolMcpHandler {
             tool: request.name.into_owned(),
             arguments: Value::Object(request.arguments.unwrap_or_default()),
         };
+        if params.tool == "workflow" {
+            let handler = self.workflow_handler.as_ref().ok_or_else(|| {
+                McpError::internal_error("workflow supervisor is unavailable", None)
+            })?;
+            return Ok(dynamic_response_to_mcp(handler.call(params).await));
+        }
         let mut thread_start_params = self.thread_start_params.clone();
         thread_start_params.config.get_or_insert_default().insert(
             format!("mcp_servers.{}", dynamic_tools::NAMESPACE),
@@ -301,24 +386,30 @@ impl ServerHandler for DynamicToolMcpHandler {
             Some(&app_event_tx),
         )
         .await;
-        let content = response
-            .content_items
-            .into_iter()
-            .map(|item| match item {
-                DynamicToolCallOutputContentItem::InputText { text } => ContentBlock::text(text),
-                DynamicToolCallOutputContentItem::InputImage { image_url } => {
-                    ContentBlock::text(image_url)
-                }
-                DynamicToolCallOutputContentItem::InputAudio { audio_url } => {
-                    ContentBlock::text(audio_url)
-                }
-            })
-            .collect();
-        Ok(if response.success {
-            CallToolResult::success(content)
-        } else {
-            CallToolResult::error(content)
-        }
-        .into())
+        Ok(dynamic_response_to_mcp(response))
     }
+}
+
+fn dynamic_response_to_mcp(
+    response: codex_app_server_protocol::DynamicToolCallResponse,
+) -> rmcp::model::CallToolResponse {
+    let content = response
+        .content_items
+        .into_iter()
+        .map(|item| match item {
+            DynamicToolCallOutputContentItem::InputText { text } => ContentBlock::text(text),
+            DynamicToolCallOutputContentItem::InputImage { image_url } => {
+                ContentBlock::text(image_url)
+            }
+            DynamicToolCallOutputContentItem::InputAudio { audio_url } => {
+                ContentBlock::text(audio_url)
+            }
+        })
+        .collect();
+    if response.success {
+        CallToolResult::success(content)
+    } else {
+        CallToolResult::error(content)
+    }
+    .into()
 }

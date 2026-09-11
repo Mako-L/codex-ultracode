@@ -1,0 +1,114 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ReasoningEffort": {
+      "description": "A non-empty reasoning effort value advertised by the model.",
+      "minLength": 1,
+      "type": "string"
+    },
+    "WorkflowWorkspace": {
+      "properties": {
+        "baseCommit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "isolated": {
+          "type": "boolean"
+        },
+        "workspaceId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "cwd",
+        "isolated"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "agentType": {
+      "description": "Native role name. The host resolves configured roles; this protocol does not freeze an enum.",
+      "type": "string"
+    },
+    "authorityDigest": {
+      "type": "string"
+    },
+    "authorityGeneration": {
+      "format": "uint64",
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "authorityRef": {
+      "type": "string"
+    },
+    "effort": {
+      "$ref": "#/definitions/ReasoningEffort"
+    },
+    "effortExplicit": {
+      "default": false,
+      "type": "boolean"
+    },
+    "model": {
+      "type": "string"
+    },
+    "modelExplicit": {
+      "default": false,
+      "type": "boolean"
+    },
+    "parentThreadId": {
+      "type": "string"
+    },
+    "prompt": {
+      "type": "string"
+    },
+    "readOnly": {
+      "description": "Restrict this worker to the parent's read-only intersection.",
+      "type": "boolean"
+    },
+    "resumeThreadId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "roleDigest": {
+      "type": "string"
+    },
+    "runId": {
+      "type": "string"
+    },
+    "schema": true,
+    "workerId": {
+      "type": "string"
+    },
+    "workspace": {
+      "$ref": "#/definitions/WorkflowWorkspace"
+    }
+  },
+  "required": [
+    "agentType",
+    "authorityDigest",
+    "authorityGeneration",
+    "authorityRef",
+    "effort",
+    "model",
+    "parentThreadId",
+    "prompt",
+    "readOnly",
+    "roleDigest",
+    "runId",
+    "workerId",
+    "workspace"
+  ],
+  "title": "WorkflowWorkerStartParams",
+  "type": "object"
+}

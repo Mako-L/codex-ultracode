@@ -323,6 +323,7 @@ async fn slash_side_requests_forked_side_question_while_task_running() {
             && user_message
                 == UserMessage {
                     text: "explore the codebase".to_string(),
+                    workflow_keyword: None,
                     local_images: Vec::new(),
                     remote_image_urls: Vec::new(),
                     text_elements: Vec::new(),
@@ -369,6 +370,7 @@ async fn slash_btw_requests_forked_side_question_while_task_running() {
             && user_message
                 == UserMessage {
                     text: "explore the codebase".to_string(),
+                    workflow_keyword: None,
                     local_images: Vec::new(),
                     remote_image_urls: Vec::new(),
                     text_elements: Vec::new(),

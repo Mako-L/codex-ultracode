@@ -1,0 +1,78 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "WorkflowWorkspace": {
+      "properties": {
+        "baseCommit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "isolated": {
+          "type": "boolean"
+        },
+        "workspaceId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "cwd",
+        "isolated"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "agentType": {
+      "type": "string"
+    },
+    "authorityDigest": {
+      "type": "string"
+    },
+    "authorityRef": {
+      "type": "string"
+    },
+    "isolation": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "previous": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/WorkflowWorkspace"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "requestedCwd": {
+      "type": "string"
+    },
+    "runId": {
+      "type": "string"
+    },
+    "workerId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "agentType",
+    "authorityDigest",
+    "authorityRef",
+    "requestedCwd",
+    "runId",
+    "workerId"
+  ],
+  "title": "WorkflowWorkspacePrepareParams",
+  "type": "object"
+}

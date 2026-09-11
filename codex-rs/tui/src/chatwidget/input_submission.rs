@@ -26,6 +26,7 @@ impl ChatWidget {
         let remote_image_urls = self.take_remote_image_urls();
         UserMessage {
             text,
+            workflow_keyword: None,
             local_images,
             remote_image_urls,
             text_elements,
@@ -152,6 +153,7 @@ impl ChatWidget {
                 local_images,
                 mention_bindings,
                 remote_image_urls,
+                workflow_keyword,
             } = user_message_for_restore(user_message, &history_record);
             self.restore_blocked_image_submission(
                 text,
@@ -160,6 +162,7 @@ impl ChatWidget {
                 mention_bindings,
                 remote_image_urls,
             );
+            self.bottom_pane.restore_workflow_keyword(workflow_keyword);
             return (false, None);
         }
         let UserMessage {
@@ -168,6 +171,7 @@ impl ChatWidget {
             remote_image_urls,
             text_elements,
             mut mention_bindings,
+            workflow_keyword,
         } = user_message;
         if !self.bottom_pane.task_mentions_enabled() {
             mention_bindings
@@ -327,6 +331,7 @@ impl ChatWidget {
             self.restore_user_message_to_composer(user_message_for_restore(
                 UserMessage {
                     text,
+                    workflow_keyword,
                     local_images,
                     remote_image_urls,
                     text_elements,
@@ -350,6 +355,7 @@ impl ChatWidget {
         let pending_steer = (!render_in_history).then(|| PendingSteer {
             user_message: UserMessage {
                 text: text.clone(),
+                workflow_keyword,
                 local_images: local_images.clone(),
                 remote_image_urls: remote_image_urls.clone(),
                 text_elements: text_elements.clone(),
@@ -365,7 +371,7 @@ impl ChatWidget {
             .filter(|_| self.current_model_supports_personality());
         let service_tier = self.service_tier_update_for_core();
         let active_permission_profile = self.config.permissions.active_permission_profile();
-        let op = AppCommand::user_turn(
+        let mut op = AppCommand::user_turn(
             items,
             self.config.cwd.to_path_buf(),
             AskForApproval::from(self.config.permissions.approval_policy.value()),
@@ -378,8 +384,45 @@ impl ChatWidget {
             collaboration_mode,
             personality,
         );
+        if let AppCommand::UserTurn {
+            additional_context, ..
+        } = &mut op
+        {
+            let context = additional_context.get_or_insert_default();
+            if self.config.ultracode && !self.config.disable_workflows {
+                context.insert("ultracode_session".to_string(),codex_app_server_protocol::AdditionalContextEntry {
+                    kind:codex_app_server_protocol::AdditionalContextKind::Application,
+                    value:"The user enabled Ultracode for this session. Use the workflow tool to orchestrate their request. The parent uses xhigh reasoning; explicit worker model and effort choices remain independent.".to_string(),
+                });
+            }
+            if let Some(enabled) = workflow_keyword {
+                context.insert("ultracode_keyword".to_string(), codex_app_server_protocol::AdditionalContextEntry {
+                    kind: codex_app_server_protocol::AdditionalContextKind::Application,
+                    value: if enabled {
+                        "The user enabled Ultracode for this message through the interactive workflow keyword. Use the workflow tool to carry out the request. This choice does not change session reasoning effort."
+                    } else {
+                        "The user explicitly dismissed the interactive workflow keyword for this message. Do not enable a workflow merely because its text contains ultracode. A separate explicit workflow request or enabled session workflow mode still applies."
+                    }.to_string(),
+                });
+            }
+            if !self.config.disable_workflows
+                && let Some(value) = workflow_size_advisory(self.config.workflow_size_guideline)
+            {
+                context.insert(
+                    "workflow_size_guideline".to_string(),
+                    codex_app_server_protocol::AdditionalContextEntry {
+                        kind: codex_app_server_protocol::AdditionalContextKind::Application,
+                        value: value.to_string(),
+                    },
+                );
+            }
+            if context.is_empty() {
+                *additional_context = None;
+            }
+        }
         let submitted_message = UserMessage {
             text,
+            workflow_keyword,
             local_images,
             remote_image_urls,
             text_elements,
@@ -492,5 +535,23 @@ impl ChatWidget {
             self.image_inputs_not_supported_message(),
         ));
         self.request_redraw();
+    }
+}
+
+fn workflow_size_advisory(
+    guideline: Option<codex_protocol::config_types::WorkflowSizeGuideline>,
+) -> Option<&'static str> {
+    use codex_protocol::config_types::WorkflowSizeGuideline::*;
+    match guideline.unwrap_or(Medium) {
+        Unrestricted => None,
+        Small => Some(
+            "When authoring a dynamic workflow, aim for fewer than 5 agents. This is advisory; the task may require a different scale.",
+        ),
+        Medium => Some(
+            "When authoring a dynamic workflow, aim for fewer than 15 agents. This is advisory; the task may require a different scale.",
+        ),
+        Large => Some(
+            "When authoring a dynamic workflow, aim for fewer than 50 agents. This is advisory; the task may require a different scale.",
+        ),
     }
 }

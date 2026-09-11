@@ -599,7 +599,14 @@ pub async fn run_main_with_transport_options(
     codex_core::otel_init::install_sqlite_telemetry(otel.as_ref(), OTEL_SERVICE_NAME);
     let unix_socket_startup_lock = match &transport {
         AppServerTransport::UnixSocket { socket_path } => {
-            let startup_lock_path = app_server_startup_lock_path(&codex_home)?;
+            let startup_lock_path = if socket_path == &app_server_control_socket_path(&codex_home)?
+            {
+                app_server_startup_lock_path(&codex_home)?
+            } else {
+                AbsolutePathBuf::from_absolute_path(
+                    socket_path.as_path().with_extension("startup.lock"),
+                )?
+            };
             let startup_lock = acquire_app_server_startup_lock(startup_lock_path).await?;
             prepare_control_socket_path(socket_path.as_path()).await?;
             Some(startup_lock)

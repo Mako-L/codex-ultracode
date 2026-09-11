@@ -786,6 +786,8 @@ impl App {
     }
 
     pub(super) fn on_update_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
+        self.config.ultracode = false;
+        self.chat_widget.set_ultracode_mode(false);
         let clear_ephemeral_plan_effort = effort != Some(ReasoningEffortConfig::Ultra)
             && self.chat_widget.config_ref().plan_mode_reasoning_effort
                 == Some(ReasoningEffortConfig::Ultra)

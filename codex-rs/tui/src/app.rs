@@ -247,6 +247,8 @@ mod thread_session_state;
 mod thread_settings;
 mod thread_title;
 mod transcript_export;
+mod workflow;
+mod workflow_effort;
 mod working_directory;
 
 use self::agent_navigation::AgentNavigationDirection;
@@ -558,6 +560,7 @@ pub(crate) struct App {
 
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
+    pub(crate) workflow_sessions: HashMap<String, workflow::WorkflowSession>,
     pub(crate) deferred_history_lines: Vec<crate::terminal_hyperlinks::HyperlinkLine>,
     has_emitted_history_lines: bool,
     transcript_reflow: TranscriptReflowState,
@@ -869,9 +872,7 @@ impl App {
         }
 
         if self.overlay.is_some() {
-            let _ = self
-                .handle_backtrack_overlay_event(tui, app_server, event)
-                .await?;
+            let _ = Box::pin(self.handle_backtrack_overlay_event(tui, app_server, event)).await?;
         } else {
             match event {
                 TuiEvent::Key(key_event) => {

@@ -38,6 +38,9 @@ use crate::render::renderable::Renderable;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::tui;
 use crate::tui::TuiEvent;
+use crate::workflow_view::WorkflowAction;
+use crate::workflow_view::WorkflowScreen;
+use crate::workflow_view::WorkflowView;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
@@ -58,6 +61,7 @@ use scrolling::render_offset_content;
 pub(crate) enum Overlay {
     Transcript(TranscriptOverlay),
     Static(StaticOverlay),
+    Workflow(Box<WorkflowOverlay>),
 }
 
 impl Overlay {
@@ -85,6 +89,7 @@ impl Overlay {
         match self {
             Overlay::Transcript(o) => o.handle_event(tui, event),
             Overlay::Static(o) => o.handle_event(tui, event),
+            Overlay::Workflow(o) => o.handle_event(tui, event),
         }
     }
 
@@ -92,7 +97,56 @@ impl Overlay {
         match self {
             Overlay::Transcript(o) => o.is_done(),
             Overlay::Static(o) => o.is_done(),
+            Overlay::Workflow(o) => o.is_done(),
         }
+    }
+}
+
+pub(crate) struct WorkflowOverlay {
+    pub(crate) view: WorkflowView,
+    done: bool,
+}
+
+impl WorkflowOverlay {
+    pub(crate) fn new(snapshot: serde_json::Value, effort: Option<String>) -> Self {
+        let mut view = WorkflowView::new(snapshot, None);
+        if let Some(effort) = effort {
+            view.state.screen = WorkflowScreen::Effort;
+            if !effort.is_empty() {
+                view.state.effort = effort;
+            }
+        }
+        Self { view, done: false }
+    }
+
+    pub(crate) fn update(&mut self, snapshot: serde_json::Value) {
+        self.view.update(snapshot);
+    }
+    pub(crate) fn handle_key(&mut self, key: KeyEvent) -> Option<WorkflowAction> {
+        let action = self.view.handle_key(key);
+        if action == Some(WorkflowAction::Close) {
+            self.done = true;
+        }
+        action
+    }
+    fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
+        match event {
+            TuiEvent::Draw | TuiEvent::Resume | TuiEvent::Resize(_) | TuiEvent::FocusGained => {
+                tui.draw(u16::MAX, |frame| self.render(frame.area(), frame.buffer))?;
+            }
+            TuiEvent::Key(key) => {
+                let _ = self.handle_key(key);
+            }
+            _ => {}
+        }
+        tui.frame_requester().schedule_frame();
+        Ok(())
+    }
+    fn is_done(&self) -> bool {
+        self.done
+    }
+    pub(crate) fn render(&self, area: Rect, buf: &mut Buffer) {
+        (&self.view).render(area, buf);
     }
 }
 

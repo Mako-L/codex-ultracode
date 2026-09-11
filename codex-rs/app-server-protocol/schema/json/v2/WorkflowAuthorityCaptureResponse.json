@@ -1,0 +1,117 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ReasoningEffort": {
+      "description": "A non-empty reasoning effort value advertised by the model.",
+      "minLength": 1,
+      "type": "string"
+    },
+    "WorkflowModelOption": {
+      "properties": {
+        "defaultEffort": {
+          "$ref": "#/definitions/ReasoningEffort"
+        },
+        "model": {
+          "type": "string"
+        },
+        "supportedEfforts": {
+          "items": {
+            "$ref": "#/definitions/ReasoningEffort"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "defaultEffort",
+        "model",
+        "supportedEfforts"
+      ],
+      "type": "object"
+    },
+    "WorkflowPluginOption": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "root": {
+          "type": "string"
+        },
+        "workflows": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "root",
+        "workflows"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "authorityDigest": {
+      "type": "string"
+    },
+    "authorityRef": {
+      "type": "string"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "generation": {
+      "format": "uint64",
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "models": {
+      "items": {
+        "$ref": "#/definitions/WorkflowModelOption"
+      },
+      "type": "array"
+    },
+    "parentEffort": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ReasoningEffort"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "parentModel": {
+      "type": "string"
+    },
+    "plugins": {
+      "items": {
+        "$ref": "#/definitions/WorkflowPluginOption"
+      },
+      "type": "array"
+    },
+    "webSearchAvailable": {
+      "type": "boolean"
+    },
+    "workflowHostUrl": {
+      "description": "Effective native workflow listener, used to bind a headless controller to its parent.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "authorityDigest",
+    "authorityRef",
+    "cwd",
+    "generation",
+    "models",
+    "parentModel",
+    "plugins",
+    "webSearchAvailable"
+  ],
+  "title": "WorkflowAuthorityCaptureResponse",
+  "type": "object"
+}

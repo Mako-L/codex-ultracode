@@ -5,6 +5,7 @@ codex_rust_crate(
     compile_data = glob([
         "assets/**",
         "frames/**",
+        "src/workflow_view_test/**",
     ]),
     crate_name = "codex_tui",
     extra_binaries = [

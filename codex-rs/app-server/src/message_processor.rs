@@ -1137,6 +1137,41 @@ impl MessageProcessor {
                     )
                     .await
             }
+            ClientRequest::WorkflowAuthorityCapture { params, .. } => self
+                .turn_processor
+                .workflow_authority_capture(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::WorkflowScriptRead { params, .. } => self
+                .turn_processor
+                .workflow_script_read(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::WorkflowSave { params, .. } => self
+                .turn_processor
+                .workflow_save(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::WorkflowCompletionInject { params, .. } => self
+                .turn_processor
+                .workflow_completion_inject(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::WorkflowWorkspacePrepare { params, .. } => self
+                .turn_processor
+                .workflow_workspace_prepare(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::WorkflowWorkspaceRelease { params, .. } => self
+                .turn_processor
+                .workflow_workspace_release(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::WorkflowWorkerStart { params, .. } => self
+                .turn_processor
+                .workflow_worker_start(&request_id, params)
+                .await
+                .map(|response| Some(response.into())),
             ClientRequest::ThreadUnsubscribe { params, .. } => {
                 let thread_id = params.thread_id.clone();
                 let response = self

@@ -530,6 +530,13 @@
             "null"
           ]
         },
+        "disable_workflows": {
+          "description": "Disables all workflow entry points when true.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "forced_chatgpt_workspace_id": {
           "anyOf": [
             {
@@ -664,10 +671,34 @@
             }
           ]
         },
+        "ultracode": {
+          "description": "Enables workflow orchestration globally. This remains separate from the model reasoning effort and the keyword trigger.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "ultracode_keyword_trigger": {
+          "description": "Enables the `ultracode:` prompt keyword trigger.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "web_search": {
           "anyOf": [
             {
               "$ref": "#/definitions/WebSearchMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workflow_size_guideline": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WorkflowSizeGuideline"
             },
             {
               "type": "null"
@@ -1114,6 +1145,16 @@
         }
       },
       "type": "object"
+    },
+    "WorkflowSizeGuideline": {
+      "description": "Advisory target for the number of agents in a dynamically authored workflow.",
+      "enum": [
+        "unrestricted",
+        "small",
+        "medium",
+        "large"
+      ],
+      "type": "string"
     }
   },
   "properties": {

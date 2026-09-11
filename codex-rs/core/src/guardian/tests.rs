@@ -3287,6 +3287,53 @@ async fn guardian_review_does_not_retry_valid_denial() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_reviews_idle_workflow_save_allow_and_deny() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    for (outcome, approved) in [("allow", true), ("deny", false)] {
+        let server = start_mock_server().await;
+        let assessment = serde_json::json!({
+            "risk_level": if approved { "low" } else { "high" },
+            "user_authorization": "high",
+            "outcome": outcome,
+            "rationale": format!("workflow save {outcome}"),
+        })
+        .to_string();
+        let request_log = mount_sse_sequence(
+            &server,
+            vec![sse(vec![
+                ev_response_created(&format!("workflow-save-{outcome}")),
+                ev_assistant_message(&format!("workflow-save-message-{outcome}"), &assessment),
+                ev_completed(&format!("workflow-save-{outcome}")),
+            ])],
+        )
+        .await;
+        let (session, turn) = guardian_test_session_and_turn(&server).await;
+        seed_guardian_parent_history(&session, &turn).await;
+        let file = test_path_buf("/repo/.codex/workflows/audit.js").abs();
+        let decision = review_approval_request(
+            &session,
+            &turn,
+            format!("review-workflow-save-{outcome}"),
+            GuardianApprovalRequest::ApplyPatch {
+                id: format!("workflow-save-{outcome}"),
+                cwd: test_path_buf("/repo").abs(),
+                files: vec![file],
+                patch: "create .codex/workflows/audit.js".to_string(),
+            },
+            ApprovalRequestReasons {
+                approval: Some("Save a completed dynamic workflow".to_string()),
+                retry: None,
+            },
+        )
+        .await;
+        assert_eq!(matches!(decision, ReviewDecision::Approved), approved);
+        assert_eq!(request_log.requests().len(), 1);
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn escalated_retry_bypasses_extension_approval_and_runs_guardian() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 

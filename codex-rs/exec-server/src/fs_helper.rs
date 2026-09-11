@@ -279,6 +279,7 @@ pub(crate) async fn run_direct_request(
                     bytes,
                     WriteFileOptions {
                         follow_symlinks: params.follow_symlinks.unwrap_or(true),
+                        create_new: params.create_new.unwrap_or(false),
                     },
                     /*sandbox*/ None,
                 )
@@ -421,6 +422,7 @@ mod tests {
                 path: path.clone(),
                 data_base64: String::new(),
                 follow_symlinks: None,
+                create_new: None,
                 sandbox: None,
             }))?;
             assert_eq!(

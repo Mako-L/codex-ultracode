@@ -35,6 +35,11 @@ pub enum TurnInput {
         client_id: Option<String>,
     },
     ResponseItem(ResponseItem),
+    /// A trusted native workflow completion; converted to its typed context fragment by Core.
+    WorkflowCompletion {
+        run_id: String,
+        summary: String,
+    },
     InterAgentCommunication(InterAgentCommunication),
 }
 

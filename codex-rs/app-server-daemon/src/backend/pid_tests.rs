@@ -7,7 +7,6 @@ use tempfile::TempDir;
 use codex_app_server_transport::REMOTE_CONTROL_DISABLED_ENV_VAR;
 
 use super::PidBackend;
-use super::PidCommandKind;
 use super::PidFileState;
 use super::PidLogTail;
 use super::PidRecord;
@@ -15,6 +14,26 @@ use super::read_process_start_time;
 use super::read_stderr_log_tail;
 use super::stderr_log_file_for_pid_file;
 use super::try_lock_file;
+
+#[test]
+fn explicit_workflow_socket_is_passed_without_changing_default_daemon_arguments() {
+    let directory = tempfile::tempdir().unwrap();
+    let socket = directory.path().join("native control.sock");
+    let backend = PidBackend::new(
+        directory.path().join("fork-codex"),
+        directory.path().join("native.pid"),
+        /*remote_control_enabled*/ false,
+    )
+    .with_socket_path(socket.clone());
+    assert_eq!(
+        backend.command_args(),
+        vec![
+            "app-server".to_owned(),
+            "--listen".to_owned(),
+            format!("unix://{}", socket.display())
+        ]
+    );
+}
 
 #[tokio::test]
 async fn locked_empty_pid_file_is_treated_as_active_reservation() {
@@ -190,12 +209,7 @@ async fn stop_reaps_untracked_app_server_child() {
 
 #[test]
 fn update_loop_uses_hidden_app_server_subcommand() {
-    let backend = PidBackend {
-        codex_bin: "codex".into(),
-        pid_file: "updater.pid".into(),
-        lock_file: "updater.pid.lock".into(),
-        command_kind: PidCommandKind::UpdateLoop,
-    };
+    let backend = PidBackend::new_update_loop("codex".into(), "updater.pid".into());
 
     assert_eq!(
         backend.command_args(),

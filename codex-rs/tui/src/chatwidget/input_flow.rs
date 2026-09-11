@@ -21,8 +21,10 @@ impl ChatWidget {
             InputResult::Submitted {
                 text,
                 text_elements,
+                workflow_keyword,
             } => {
-                let user_message = self.user_message_from_submission(text, text_elements);
+                let mut user_message = self.user_message_from_submission(text, text_elements);
+                user_message.workflow_keyword = workflow_keyword;
                 if user_message.text.is_empty()
                     && user_message.local_images.is_empty()
                     && user_message.remote_image_urls.is_empty()
@@ -56,10 +58,12 @@ impl ChatWidget {
             InputResult::Queued {
                 text,
                 text_elements,
+                workflow_keyword,
                 action,
                 pending_pastes,
             } => {
-                let user_message = self.user_message_from_submission(text, text_elements);
+                let mut user_message = self.user_message_from_submission(text, text_elements);
+                user_message.workflow_keyword = workflow_keyword;
                 self.queue_user_message_with_options(user_message, action, pending_pastes);
             }
             InputResult::Command(cmd) => {
@@ -68,8 +72,24 @@ impl ChatWidget {
             InputResult::ServiceTierCommand(command) => {
                 self.handle_service_tier_command_dispatch(command);
             }
+            InputResult::WorkflowCommand(command) => {
+                self.app_event_tx.send(AppEvent::Workflow(
+                    crate::app_event::WorkflowEvent::RunSaved {
+                        name: command.name,
+                        args: None,
+                    },
+                ));
+            }
             InputResult::CommandWithArgs(cmd, args, text_elements) => {
                 self.handle_slash_command_with_args_dispatch(cmd, args, text_elements);
+            }
+            InputResult::WorkflowCommandWithArgs(command, args) => {
+                self.app_event_tx.send(AppEvent::Workflow(
+                    crate::app_event::WorkflowEvent::RunSaved {
+                        name: command.name,
+                        args: Some(args),
+                    },
+                ));
             }
             InputResult::ParentOwnedInputBlocked => {
                 self.add_error_message(PARENT_OWNED_INPUT_MESSAGE.to_string());
@@ -281,6 +301,7 @@ impl ChatWidget {
         let should_queue = self.is_plan_streaming_in_tui();
         let user_message = UserMessage {
             text,
+            workflow_keyword: None,
             local_images: Vec::new(),
             remote_image_urls: Vec::new(),
             text_elements: Vec::new(),
