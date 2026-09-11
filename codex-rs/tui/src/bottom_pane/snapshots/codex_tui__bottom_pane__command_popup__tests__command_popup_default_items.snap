@@ -24,6 +24,9 @@ expression: commands
 /init - create an AGENTS.md file with instructions for Codex
 /compact - summarize conversation to prevent hitting the context limit
 /recap - summarize the current conversation now
+/workflows - view and control Ultracode workflows
+/effort - configure Ultracode workflow effort
+/config - configure dynamic workflow size
 /agents - view and switch between all active agent sessions
 /side - start a side conversation in an ephemeral fork
 /copy - copy the last response, code block, or quote
