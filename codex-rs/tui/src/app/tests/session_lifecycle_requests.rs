@@ -2249,7 +2249,8 @@ async fn underfilled_scrollback_fetches_older_pages_without_opening_the_transcri
 
 #[tokio::test]
 async fn paginated_workflows_never_request_full_thread_history() -> Result<()> {
-    let (app, _codex_home) = make_history_test_app().await?;
+    // Keep this multi-stage lifecycle's large child futures off the test thread stack.
+    let (app, _codex_home) = Box::pin(make_history_test_app()).await?;
     let paginated_thread_id = create_history_rollout(
         &app.config,
         ThreadHistoryMode::Paginated,
@@ -2260,42 +2261,37 @@ async fn paginated_workflows_never_request_full_thread_history() -> Result<()> {
         ThreadHistoryMode::Legacy,
         "legacy visible history",
     )?;
-    let (mut app_server, requests, proxy) = start_recording_app_server(
+    let (mut app_server, requests, proxy) = Box::pin(start_recording_app_server(
         &app.config,
         /*blocked_thread_list*/ None,
         /*failed_thread_name*/ None,
-    )
+    ))
     .await?;
 
     app_server.remember_thread_history_mode(paginated_thread_id, ThreadHistoryMode::Legacy);
-    let resumed = app_server
-        .resume_thread(
-            app.config.clone(),
-            paginated_thread_id,
-            crate::app_server_session::ResumeModelSettings::RestoreFromThread,
-        )
-        .await?;
+    let resumed = Box::pin(app_server.resume_thread(
+        app.config.clone(),
+        paginated_thread_id,
+        crate::app_server_session::ResumeModelSettings::RestoreFromThread,
+    ))
+    .await?;
     assert_eq!(resumed.session.thread_id, paginated_thread_id);
     assert!(recorded_params(&requests, "thread/read").is_empty());
     let resume_requests = recorded_params(&requests, "thread/resume");
     assert_eq!(resume_requests.len(), 1);
     assert_eq!(resume_requests[0]["excludeTurns"], true);
-    let cells = crate::thread_transcript::load_session_transcript(
+    let cells = Box::pin(crate::thread_transcript::load_session_transcript(
         &mut app_server,
         paginated_thread_id,
         crate::thread_transcript::RawReasoningVisibility::Hidden,
         Some(&app.config),
-    )
+    ))
     .await?;
     assert!(!cells.is_empty());
-    app_server
-        .fork_thread(app.config.clone(), paginated_thread_id)
-        .await?;
+    Box::pin(app_server.fork_thread(app.config.clone(), paginated_thread_id)).await?;
     let mut side_config = app.config.clone();
     side_config.ephemeral = true;
-    app_server
-        .fork_side_thread(side_config, paginated_thread_id)
-        .await?;
+    Box::pin(app_server.fork_side_thread(side_config, paginated_thread_id)).await?;
 
     let paginated_reads = recorded_params(&requests, "thread/read");
     assert!(!paginated_reads.is_empty());
@@ -2309,11 +2305,11 @@ async fn paginated_workflows_never_request_full_thread_history() -> Result<()> {
     assert!(!recorded_params(&requests, "thread/items/list").is_empty());
 
     let previous_read_count = paginated_reads.len();
-    let preview = crate::resume_picker::load_transcript_preview(
+    let preview = Box::pin(crate::resume_picker::load_transcript_preview(
         &mut app_server,
         legacy_thread_id,
         Some(&app.config),
-    )
+    ))
     .await?;
     assert!(!preview.is_empty());
     let preview_reads = recorded_params(&requests, "thread/read");
@@ -2324,12 +2320,12 @@ async fn paginated_workflows_never_request_full_thread_history() -> Result<()> {
     assert_eq!(preview_include_turns, vec![false]);
 
     let previous_read_count = preview_reads.len();
-    crate::thread_transcript::load_session_transcript(
+    Box::pin(crate::thread_transcript::load_session_transcript(
         &mut app_server,
         legacy_thread_id,
         crate::thread_transcript::RawReasoningVisibility::Hidden,
         Some(&app.config),
-    )
+    ))
     .await?;
     let legacy_reads = recorded_params(&requests, "thread/read");
     let legacy_include_turns = legacy_reads[previous_read_count..]

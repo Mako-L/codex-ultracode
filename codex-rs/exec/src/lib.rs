@@ -13,12 +13,13 @@ pub(crate) mod exec_events;
 pub use cli::Cli;
 pub use cli::Command;
 pub use cli::ReviewArgs;
+use codex_app_server_client::AppServerClient;
+use codex_app_server_client::AppServerEvent;
 use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 use codex_app_server_client::EnvironmentManager;
 use codex_app_server_client::ExecServerRuntimePaths;
 use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_client::InProcessClientStartArgs;
-use codex_app_server_client::InProcessServerEvent;
 use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigWarningNotification;
@@ -207,6 +208,7 @@ impl RequestIdSequencer {
 }
 
 struct ExecRunArgs {
+    workflow_factory: Option<NativeWorkflowHostFactory>,
     in_process_start_args: InProcessClientStartArgs,
     state_db: Option<StateDbHandle>,
     command: Option<ExecCommand>,
@@ -243,7 +245,30 @@ fn exec_stderr_env_filter() -> EnvFilter {
         .unwrap_or_else(|_| EnvFilter::new("error"))
 }
 
+mod native_workflows;
+pub use native_workflows::NativeWorkflowConnection;
+pub use native_workflows::NativeWorkflowFuture;
+pub use native_workflows::NativeWorkflowHostFactory;
+
 pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
+    run_main_with_factory(cli, arg0_paths, None).await
+}
+
+/// Run the integrated CLI's explicitly selected native workflow backend.
+pub async fn run_main_with_native_workflow_host(
+    mut cli: Cli,
+    arg0_paths: Arg0DispatchPaths,
+    factory: NativeWorkflowHostFactory,
+) -> anyhow::Result<()> {
+    cli.native_workflow_host = true;
+    run_main_with_factory(cli, arg0_paths, Some(factory)).await
+}
+
+async fn run_main_with_factory(
+    cli: Cli,
+    arg0_paths: Arg0DispatchPaths,
+    workflow_factory: Option<NativeWorkflowHostFactory>,
+) -> anyhow::Result<()> {
     if let Err(err) = set_default_originator("codex_exec".to_string()) {
         tracing::warn!(?err, "Failed to set codex exec originator override {err:?}");
     }
@@ -251,6 +276,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     let Cli {
         command,
         strict_config,
+        native_workflow_host,
         shared,
         thread_source,
         skip_git_repo_check,
@@ -264,6 +290,14 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         output_schema: output_schema_path,
         mut config_overrides,
     } = cli;
+    if native_workflow_host && workflow_factory.is_none() {
+        anyhow::bail!("native workflows require the integrated codex CLI");
+    }
+    if native_workflow_host && (ignore_user_config || ignore_rules) {
+        anyhow::bail!(
+            "native workflow execution cannot ignore the daemon's user configuration or policy rules"
+        );
+    }
     let mut shared = shared.into_inner();
     shared.take_auto_review_config_overrides(&mut config_overrides);
     let SharedCliOptions {
@@ -560,6 +594,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
     };
     run_exec_session(ExecRunArgs {
+        workflow_factory,
         in_process_start_args,
         state_db,
         command,
@@ -659,6 +694,7 @@ async fn load_bootstrap_config_or_exit(
 
 async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     let ExecRunArgs {
+        workflow_factory,
         in_process_start_args,
         state_db,
         command,
@@ -809,11 +845,39 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     }
 
     let mut request_ids = RequestIdSequencer::new();
-    let mut client = InProcessAppServerClient::start(in_process_start_args)
-        .await
-        .map_err(|err| {
-            anyhow::anyhow!("failed to initialize in-process app-server client: {err}")
-        })?;
+    let mut thread_start_params = thread_start_params_from_config(&config, &thread_source);
+    let mut workflow_control = None;
+    let mut client = if let Some(factory) = workflow_factory {
+        if oss {
+            anyhow::bail!("native workflow execution requires a Codex model provider");
+        }
+        for (key, value) in &in_process_start_args.cli_overrides {
+            thread_start_params
+                .config
+                .get_or_insert_default()
+                .insert(key.clone(), serde_json::to_value(value)?);
+        }
+        native_workflows::apply_loader_overrides(
+            &mut thread_start_params,
+            &in_process_start_args.loader_overrides,
+            &config.codex_home,
+        )?;
+        let connection = factory(config.clone(), thread_start_params.clone()).await?;
+        thread_start_params
+            .config
+            .get_or_insert_default()
+            .insert("mcp_servers.codex_tui".into(), connection.mcp_config);
+        workflow_control = Some(connection.control);
+        connection.client
+    } else {
+        AppServerClient::InProcess(
+            InProcessAppServerClient::start(in_process_start_args)
+                .await
+                .map_err(|err| {
+                    anyhow::anyhow!("failed to initialize in-process app-server client: {err}")
+                })?,
+        )
+    };
 
     // Resolve resume and fork through existing app-server thread lifecycle APIs.
     let (primary_thread_id, fallback_session_configured) = if let Some(ExecCommand::Resume(args)) =
@@ -826,11 +890,17 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 &client,
                 ClientRequest::ThreadResume {
                     request_id: request_ids.next(),
-                    params: thread_resume_params_from_config(
-                        &config,
-                        thread_id,
-                        resume_approvals_reviewer_override,
-                    ),
+                    params: {
+                        let mut params = thread_resume_params_from_config(
+                            &config,
+                            thread_id,
+                            resume_approvals_reviewer_override,
+                        );
+                        if workflow_control.is_some() {
+                            params.config = thread_start_params.config.clone();
+                        }
+                        params
+                    },
                 },
                 "thread/resume",
             )
@@ -841,7 +911,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     .map_err(anyhow::Error::msg)?;
             (session_configured.thread_id, session_configured)
         } else {
-            let response = start_thread(&client, &mut request_ids, &config, &thread_source)
+            let response = start_thread(&client, &mut request_ids, thread_start_params.clone())
                 .await
                 .map_err(anyhow::Error::msg)?;
             let session_configured =
@@ -882,7 +952,11 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     approvals_reviewer: resume_approvals_reviewer_override,
                     sandbox: sandbox.flatten(),
                     permissions,
-                    config: thread_config_overrides_from_config(&config),
+                    config: if workflow_control.is_some() {
+                        thread_start_params.config.clone()
+                    } else {
+                        thread_config_overrides_from_config(&config)
+                    },
                     ephemeral: config.ephemeral,
                     thread_source: Some(thread_source.clone()),
                     exclude_turns: true,
@@ -915,7 +989,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         .map_err(anyhow::Error::msg)?;
         (session_configured.thread_id, session_configured)
     } else {
-        let response = start_thread(&client, &mut request_ids, &config, &thread_source)
+        let response = start_thread(&client, &mut request_ids, thread_start_params.clone())
             .await
             .map_err(anyhow::Error::msg)?;
         let session_configured = session_configured_from_thread_start_response(&response, &config)
@@ -951,7 +1025,11 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         }
     });
 
-    let task_id = match initial_operation {
+    if let Some(control) = &workflow_control {
+        // Register any already-running workflow before this exec parent starts its first turn.
+        control(primary_thread_id.to_string(), "register".into()).await?;
+    }
+    let mut task_id = match initial_operation {
         InitialOperation::ForkOnly => {
             request_shutdown(&client, &mut request_ids, &primary_thread_id_for_span)
                 .await
@@ -1040,12 +1118,20 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     let mut error_seen = false;
     let mut interrupt_channel_open = true;
     let primary_thread_id_for_requests = primary_thread_id.to_string();
+    let mut completed_parent_turn: Option<String> = None;
+    let mut waiting_workflows = false;
+    let mut workflow_poll = tokio::time::interval(std::time::Duration::from_millis(200));
     loop {
         let server_event = tokio::select! {
             maybe_interrupt = interrupt_rx.recv(), if interrupt_channel_open => {
                 if maybe_interrupt.is_none() {
                     interrupt_channel_open = false;
                     continue;
+                }
+                if let Some(control) = &workflow_control {
+                    if let Err(error) = control(primary_thread_id_for_requests.clone(),"stop".into()).await {
+                        event_processor.process_warning(format!("Unable to stop native workflows: {error}"));
+                    }
                 }
                 if let Err(err) = send_request_with_response::<TurnInterruptResponse>(
                     &client,
@@ -1065,6 +1151,20 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 continue;
             }
             maybe_event = client.next_event() => maybe_event,
+            _ = workflow_poll.tick(), if waiting_workflows && workflow_control.is_some() => {
+                let control = workflow_control.as_ref().expect("headless workflow control");
+                let finished = control(primary_thread_id_for_requests.clone(),"status".into()).await
+                    .and_then(|state| native_workflows::finished(&state,completed_parent_turn.as_deref()));
+                match finished {
+                    Ok(true) => {
+                        if let Err(error) = request_shutdown(&client,&mut request_ids,&primary_thread_id_for_requests).await { warn!("thread/unsubscribe failed during shutdown: {error}"); }
+                        break;
+                    }
+                    Ok(false) => {},
+                    Err(error) => { event_processor.process_warning(error.to_string()); error_seen = true; break; }
+                }
+                continue;
+            }
         };
 
         let Some(server_event) = server_event else {
@@ -1072,11 +1172,28 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         };
 
         match server_event {
-            InProcessServerEvent::ServerRequest(request) => {
+            AppServerEvent::ServerRequest(request) => {
                 handle_server_request(&client, *request, &mut error_seen).await;
             }
-            InProcessServerEvent::ServerNotification(notification) => {
+            AppServerEvent::ServerNotification(notification) => {
                 let mut notification = *notification;
+                if workflow_control.is_some() {
+                    match &notification {
+                        ServerNotification::TurnStarted(value)
+                            if value.thread_id == primary_thread_id_for_requests =>
+                        {
+                            task_id = value.turn.id.clone();
+                            waiting_workflows = false;
+                        }
+                        ServerNotification::TurnCompleted(value)
+                            if value.thread_id == primary_thread_id_for_requests
+                                && value.turn.id == task_id =>
+                        {
+                            completed_parent_turn = Some(value.turn.id.clone());
+                        }
+                        _ => {}
+                    }
+                }
                 if let ServerNotification::Error(payload) = &notification {
                     if payload.thread_id == primary_thread_id_for_requests
                         && payload.turn_id == task_id
@@ -1112,6 +1229,10 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     match event_processor.process_server_notification(notification) {
                         CodexStatus::Running => {}
                         CodexStatus::InitiateShutdown => {
+                            if workflow_control.is_some() {
+                                waiting_workflows = true;
+                                continue;
+                            }
                             if let Err(err) = request_shutdown(
                                 &client,
                                 &mut request_ids,
@@ -1126,7 +1247,12 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     }
                 }
             }
-            InProcessServerEvent::Lagged { skipped } => {
+            AppServerEvent::Disconnected { message } => {
+                event_processor.process_warning(message);
+                error_seen = true;
+                break;
+            }
+            AppServerEvent::Lagged { skipped } => {
                 let message = lagged_event_warning_message(skipped);
                 warn!("{message}");
                 event_processor.process_warning(message);
@@ -1146,12 +1272,10 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
 }
 
 async fn start_thread(
-    client: &InProcessAppServerClient,
+    client: &AppServerClient,
     request_ids: &mut RequestIdSequencer,
-    config: &Config,
-    thread_source: &ThreadSource,
+    mut params: ThreadStartParams,
 ) -> Result<ThreadStartResponse, String> {
-    let mut params = thread_start_params_from_config(config, thread_source);
     loop {
         match client
             .request_typed(ClientRequest::ThreadStart {
@@ -1273,7 +1397,7 @@ fn sandbox_mode_from_permission_profile(
 }
 
 async fn send_request_with_response<T>(
-    client: &InProcessAppServerClient,
+    client: &AppServerClient,
     request: ClientRequest,
     method: &str,
 ) -> Result<T, String>
@@ -1473,7 +1597,7 @@ fn should_process_notification(
 
 async fn maybe_backfill_turn_completed_items(
     thread_ephemeral: bool,
-    client: &InProcessAppServerClient,
+    client: &AppServerClient,
     request_ids: &mut RequestIdSequencer,
     notification: &mut ServerNotification,
 ) {
@@ -1588,7 +1712,7 @@ fn cwds_match(current_cwd: &Path, session_cwd: &Path) -> bool {
 }
 
 async fn resolve_resume_thread_id(
-    client: &InProcessAppServerClient,
+    client: &AppServerClient,
     config: &Config,
     state_db: Option<&StateDbHandle>,
     args: &crate::cli::ResumeArgs,
@@ -1746,7 +1870,7 @@ fn canceled_mcp_server_elicitation_response() -> Result<Value, String> {
 }
 
 async fn request_shutdown(
-    client: &InProcessAppServerClient,
+    client: &AppServerClient,
     request_ids: &mut RequestIdSequencer,
     thread_id: &str,
 ) -> Result<(), String> {
@@ -1762,7 +1886,7 @@ async fn request_shutdown(
 }
 
 async fn resolve_server_request(
-    client: &InProcessAppServerClient,
+    client: &AppServerClient,
     request_id: RequestId,
     value: serde_json::Value,
     method: &str,
@@ -1774,7 +1898,7 @@ async fn resolve_server_request(
 }
 
 async fn reject_server_request(
-    client: &InProcessAppServerClient,
+    client: &AppServerClient,
     request_id: RequestId,
     method: &str,
     reason: String,
@@ -1805,7 +1929,7 @@ fn server_request_method_name(request: &ServerRequest) -> String {
 }
 
 async fn handle_server_request(
-    client: &InProcessAppServerClient,
+    client: &AppServerClient,
     request: ServerRequest,
     error_seen: &mut bool,
 ) {

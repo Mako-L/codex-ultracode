@@ -109,6 +109,8 @@ use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::config_types::WorkflowSizeGuideline;
+use codex_protocol::config_types::WorktreeBaseRef;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::BaseInstructionsProvenance;
 use codex_protocol::models::PermissionProfile;
@@ -706,6 +708,9 @@ pub struct Config {
     /// Whether orchestrator-owned MCP tools are exposed to the model.
     pub orchestrator_mcp_enabled: bool,
 
+    /// Suppress the Ultracode plugin's MCP inventory in native workflow children.
+    pub exclude_ultracode_plugin_mcp: bool,
+
     /// Whether to inject the `<environment_context>` user block.
     pub include_environment_context: bool,
 
@@ -947,6 +952,13 @@ pub struct Config {
     /// Value to use for `reasoning.effort` when making a request using the
     /// Responses API.
     pub model_reasoning_effort: Option<ReasoningEffort>,
+    /// Enables workflow orchestration globally. Keyword eligibility is configured separately.
+    pub ultracode: bool,
+    pub ultracode_keyword_trigger: bool,
+    pub disable_workflows: bool,
+    /// `None` preserves the visible distinction between the medium default and an explicit choice.
+    pub workflow_size_guideline: Option<WorkflowSizeGuideline>,
+    pub worktree_base_ref: WorktreeBaseRef,
     /// Optional Plan-mode-specific reasoning effort override used by the TUI.
     ///
     /// When unset, Plan mode uses the built-in Plan preset default (currently
@@ -1499,6 +1511,13 @@ impl ConfigBuilder {
     }
 }
 
+fn is_ultracode_plugin_config_name(name: &str) -> bool {
+    name == "ultracode"
+        || name
+            .strip_prefix("ultracode@")
+            .is_some_and(|suffix| !suffix.is_empty())
+}
+
 impl Config {
     pub fn sqlite_config(&self) -> &codex_state::SqliteConfig {
         &self.sqlite
@@ -1699,7 +1718,11 @@ impl Config {
         for (plugin_order, plugin) in loaded_plugins
             .plugins()
             .iter()
-            .filter(|plugin| plugin.is_active())
+            .filter(|plugin| {
+                plugin.is_active()
+                    && !((self.exclude_ultracode_plugin_mcp || self.disable_workflows)
+                        && is_ultracode_plugin_config_name(&plugin.config_name))
+            })
             .enumerate()
         {
             let mut plugin_mcp_servers = plugin.mcp_servers.clone();
@@ -1726,13 +1749,28 @@ impl Config {
             }
         }
         for registration in additional_plugin_registrations {
+            if (self.exclude_ultracode_plugin_mcp || self.disable_workflows)
+                && registration
+                    .plugin_id()
+                    .is_some_and(is_ultracode_plugin_config_name)
+            {
+                continue;
+            }
             catalog.register(registration);
         }
-        for (name, server) in self.mcp_servers.get() {
-            catalog.register(McpServerRegistration::from_config(
-                name.clone(),
-                server.clone(),
-            ));
+        for (name, configured_server) in self.mcp_servers.get() {
+            if (self.exclude_ultracode_plugin_mcp || self.disable_workflows) && name == "ultracode"
+            {
+                continue;
+            }
+            let mut server = configured_server.clone();
+            if self.exclude_ultracode_plugin_mcp && name == "codex_tui" {
+                let disabled_tools = server.disabled_tools.get_or_insert_default();
+                if !disabled_tools.iter().any(|tool| tool == "workflow") {
+                    disabled_tools.push("workflow".to_string());
+                }
+            }
+            catalog.register(McpServerRegistration::from_config(name.clone(), server));
         }
 
         McpConfig {
@@ -1844,7 +1882,7 @@ impl Config {
             .map(AbsolutePathBuf::try_from)
             .transpose()?;
 
-        Self::load_config_with_layer_stack(
+        let mut rebuilt = Self::load_config_with_layer_stack(
             LOCAL_FS.as_ref(),
             cfg,
             ConfigOverrides {
@@ -1855,7 +1893,11 @@ impl Config {
             refreshed_config.codex_home.clone(),
             config_layer_stack,
         )
-        .await
+        .await?;
+        // This restriction is attached to a live native worker, not a persisted
+        // config layer. A refresh must not turn its parent workflow tools back on.
+        rebuilt.exclude_ultracode_plugin_mcp = self.exclude_ultracode_plugin_mcp;
+        Ok(rebuilt)
     }
 
     /// This is the preferred way to create an instance of [Config].
@@ -4172,6 +4214,7 @@ impl Config {
             skill_max_context_tokens,
             orchestrator_skills_enabled,
             orchestrator_mcp_enabled,
+            exclude_ultracode_plugin_mcp: false,
             include_environment_context,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
@@ -4254,6 +4297,13 @@ impl Config {
                 .unwrap_or(false),
             guardian_policy_config,
             model_reasoning_effort: cfg.model_reasoning_effort,
+            ultracode: cfg.ultracode.unwrap_or(false),
+            ultracode_keyword_trigger: cfg.ultracode_keyword_trigger.unwrap_or(true),
+            disable_workflows: cfg.disable_workflows.unwrap_or(false)
+                || std::env::var_os("ULTRACODE_DISABLE_WORKFLOWS").as_deref()
+                    == Some(std::ffi::OsStr::new("1")),
+            workflow_size_guideline: cfg.workflow_size_guideline,
+            worktree_base_ref: cfg.worktree.as_ref().map(|worktree| worktree.base_ref).unwrap_or_default(),
             plan_mode_reasoning_effort: cfg.plan_mode_reasoning_effort,
             model_reasoning_summary: cfg.model_reasoning_summary,
             model_catalog,

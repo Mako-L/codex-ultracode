@@ -40,6 +40,12 @@ mod stream_animation_tests;
 mod thread_usage;
 #[path = "tests/turn_submission.rs"]
 mod turn_submission;
+#[path = "tests/workflow_consent_tests.rs"]
+mod workflow_consent_tests;
+#[path = "tests/workflow_effort_tests.rs"]
+mod workflow_effort_tests;
+#[path = "tests/workflow_save_tests.rs"]
+mod workflow_save_tests;
 
 use super::*;
 use crate::app_backtrack::BacktrackSelection;
@@ -5446,6 +5452,7 @@ async fn make_test_app() -> App {
         last_thread_usage_status_cell: None,
         pending_thread_usage_history_refresh: false,
         overlay: None,
+        workflow_sessions: std::collections::HashMap::new(),
         deferred_history_lines: Vec::new(),
         has_emitted_history_lines: false,
         transcript_reflow: TranscriptReflowState::default(),
@@ -5529,6 +5536,7 @@ async fn make_test_app_with_channels() -> (
             last_thread_usage_status_cell: None,
             pending_thread_usage_history_refresh: false,
             overlay: None,
+            workflow_sessions: std::collections::HashMap::new(),
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
             transcript_reflow: TranscriptReflowState::default(),
@@ -6744,6 +6752,7 @@ async fn backtrack_selection_preserves_selected_prompt_and_requests_branch() {
         thread_id: base_id,
         nth_user_message: 1,
         prompt: crate::chatwidget::UserMessage {
+            workflow_keyword: None,
             text: edited_text,
             local_images: vec![crate::bottom_pane::LocalImageAttachment {
                 placeholder: placeholder.to_string(),
@@ -7358,6 +7367,7 @@ async fn prompt_edit_forks_before_selected_prompt_and_preserves_source() -> Resu
     let source_before = std::fs::read_to_string(&source_path)?;
     let mut tui = crate::tui::test_support::make_test_tui()?;
     let prompt = crate::chatwidget::UserMessage {
+        workflow_keyword: None,
         text: "selected prompt [Image #1]".to_string(),
         local_images: vec![crate::bottom_pane::LocalImageAttachment {
             placeholder: "[Image #1]".to_string(),

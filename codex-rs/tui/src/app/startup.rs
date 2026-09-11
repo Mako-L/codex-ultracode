@@ -161,6 +161,27 @@ impl App {
         }
         let mut model = config.model.clone().unwrap_or(bootstrap.default_model);
         let available_models = bootstrap.available_models;
+        if config.disable_workflows {
+            config.ultracode = false;
+        }
+        if config.ultracode
+            && !available_models.iter().any(|preset| {
+                preset.model == model
+                    && preset
+                        .supported_reasoning_efforts
+                        .iter()
+                        .any(|option| option.effort == ReasoningEffortConfig::XHigh)
+            })
+        {
+            return shutdown_on_startup_error(
+                app_server,
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("Ultracode requires xhigh reasoning support from model `{model}`"),
+                ),
+            )
+            .await;
+        }
         let remote_connection = crate::status::remote_connection::remote_connection_status_value(
             &app_server_target,
             app_server.server_version(),
@@ -502,6 +523,7 @@ See the Codex keymap documentation for supported actions and examples."
             last_thread_usage_status_cell: None,
             pending_thread_usage_history_refresh: false,
             overlay: None,
+            workflow_sessions: std::collections::HashMap::new(),
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
             transcript_reflow: TranscriptReflowState::default(),

@@ -18,9 +18,16 @@ pub(crate) struct ServiceTierCommand {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct WorkflowCommand {
+    pub(crate) name: String,
+    pub(crate) description: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SlashCommandItem {
     Builtin(SlashCommand),
     ServiceTier(ServiceTierCommand),
+    Workflow(WorkflowCommand),
 }
 
 impl SlashCommandItem {
@@ -28,6 +35,7 @@ impl SlashCommandItem {
         match self {
             Self::Builtin(cmd) => cmd.command(),
             Self::ServiceTier(command) => &command.name,
+            Self::Workflow(command) => &command.name,
         }
     }
 
@@ -35,6 +43,7 @@ impl SlashCommandItem {
         match self {
             Self::Builtin(cmd) => cmd.supports_inline_args(),
             Self::ServiceTier(_) => false,
+            Self::Workflow(_) => true,
         }
     }
 
@@ -42,6 +51,7 @@ impl SlashCommandItem {
         match self {
             Self::Builtin(cmd) => cmd.available_in_side_conversation(),
             Self::ServiceTier(_) => false,
+            Self::Workflow(_) => false,
         }
     }
 
@@ -49,8 +59,50 @@ impl SlashCommandItem {
         match self {
             Self::Builtin(cmd) => cmd.available_during_task(),
             Self::ServiceTier(_) => true,
+            Self::Workflow(_) => false,
         }
     }
+}
+
+pub(crate) fn commands_for_input_with_workflows(
+    flags: BuiltinCommandFlags,
+    service_tier_commands: &[ServiceTierCommand],
+    workflow_commands: &[WorkflowCommand],
+) -> Vec<SlashCommandItem> {
+    let mut commands = commands_for_input(flags, service_tier_commands);
+    commands.extend(
+        workflow_commands
+            .iter()
+            .cloned()
+            .map(SlashCommandItem::Workflow),
+    );
+    commands
+}
+
+pub(crate) fn find_slash_command_with_workflows(
+    name: &str,
+    flags: BuiltinCommandFlags,
+    service_tier_commands: &[ServiceTierCommand],
+    workflow_commands: &[WorkflowCommand],
+) -> Option<SlashCommandItem> {
+    find_slash_command(name, flags, service_tier_commands).or_else(|| {
+        workflow_commands
+            .iter()
+            .find(|command| command.name == name)
+            .cloned()
+            .map(SlashCommandItem::Workflow)
+    })
+}
+
+pub(crate) fn has_slash_command_prefix_with_workflows(
+    name: &str,
+    flags: BuiltinCommandFlags,
+    service_tier_commands: &[ServiceTierCommand],
+    workflow_commands: &[WorkflowCommand],
+) -> bool {
+    commands_for_input_with_workflows(flags, service_tier_commands, workflow_commands)
+        .into_iter()
+        .any(|command| fuzzy_match(command.command(), name).is_some())
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -146,16 +198,6 @@ pub(crate) fn find_slash_command(
         .flatten()
 }
 
-pub(crate) fn has_slash_command_prefix(
-    name: &str,
-    flags: BuiltinCommandFlags,
-    service_tier_commands: &[ServiceTierCommand],
-) -> bool {
-    commands_for_input(flags, service_tier_commands)
-        .into_iter()
-        .any(|command| fuzzy_match(command.command(), name).is_some())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,6 +216,39 @@ mod tests {
             allow_elevate_sandbox: true,
             side_conversation_active: false,
         }
+    }
+
+    #[test]
+    fn saved_workflows_are_discoverable_without_shadowing_builtins() {
+        let workflows = vec![
+            WorkflowCommand {
+                name: "review".to_string(),
+                description: "saved collision".to_string(),
+            },
+            WorkflowCommand {
+                name: "acme:release-audit".to_string(),
+                description: "plugin workflow".to_string(),
+            },
+        ];
+        assert!(matches!(
+            find_slash_command_with_workflows("review", all_enabled_flags(), &[], &workflows),
+            Some(SlashCommandItem::Builtin(SlashCommand::Review))
+        ));
+        assert!(matches!(
+            find_slash_command_with_workflows(
+                "acme:release-audit",
+                all_enabled_flags(),
+                &[],
+                &workflows
+            ),
+            Some(SlashCommandItem::Workflow(command)) if command.name == "acme:release-audit"
+        ));
+        assert!(has_slash_command_prefix_with_workflows(
+            "acme:rel",
+            all_enabled_flags(),
+            &[],
+            &workflows
+        ));
     }
 
     #[test]

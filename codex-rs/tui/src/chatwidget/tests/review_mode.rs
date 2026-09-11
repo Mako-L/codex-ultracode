@@ -32,6 +32,7 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
 
     chat.input_queue.queued_user_messages.push_back(
         UserMessage {
+            workflow_keyword: None,
             text: first_text,
             local_images: vec![LocalImageAttachment {
                 placeholder: first_placeholder.to_string(),
@@ -45,6 +46,7 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
     );
     chat.input_queue.queued_user_messages.push_back(
         UserMessage {
+            workflow_keyword: None,
             text: second_text,
             local_images: vec![LocalImageAttachment {
                 placeholder: second_placeholder.to_string(),
@@ -601,6 +603,7 @@ async fn item_completed_pops_pending_steer_with_local_image_and_text_elements() 
     let text = "note".to_string();
     let text_elements = vec![TextElement::new((0..4).into(), Some("note".to_string()))];
     chat.submit_user_message(UserMessage {
+        workflow_keyword: None,
         text: text.clone(),
         local_images: vec![LocalImageAttachment {
             placeholder: "[Image #1]".to_string(),

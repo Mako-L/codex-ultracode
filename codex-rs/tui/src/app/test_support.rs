@@ -38,6 +38,7 @@ pub(super) async fn make_test_app() -> App {
         last_thread_usage_status_cell: None,
         pending_thread_usage_history_refresh: false,
         overlay: None,
+        workflow_sessions: std::collections::HashMap::new(),
         deferred_history_lines: Vec::new(),
         has_emitted_history_lines: false,
         transcript_reflow: TranscriptReflowState::default(),

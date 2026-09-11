@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ReasoningEffort": {
+      "description": "A non-empty reasoning effort value advertised by the model.",
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "properties": {
+    "effort": {
+      "$ref": "#/definitions/ReasoningEffort"
+    },
+    "model": {
+      "type": "string"
+    },
+    "sessionId": {
+      "type": "string"
+    },
+    "threadId": {
+      "type": "string"
+    },
+    "turnId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "effort",
+    "model",
+    "sessionId",
+    "threadId",
+    "turnId"
+  ],
+  "title": "WorkflowWorkerStartResponse",
+  "type": "object"
+}

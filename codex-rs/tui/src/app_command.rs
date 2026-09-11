@@ -1,5 +1,7 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
+use codex_app_server_protocol::AdditionalContextEntry;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::FileChangeApprovalDecision;
@@ -42,6 +44,8 @@ pub(crate) enum AppCommand {
         final_output_json_schema: Option<Value>,
         collaboration_mode: Option<CollaborationMode>,
         personality: Option<Personality>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        additional_context: Option<HashMap<String, AdditionalContextEntry>>,
     },
     OverrideTurnContext {
         cwd: Option<PathBuf>,
@@ -138,6 +142,7 @@ impl AppCommand {
             final_output_json_schema,
             collaboration_mode,
             personality,
+            additional_context: None,
         }
     }
 

@@ -125,3 +125,7 @@ mod turn_steer;
 mod view_image;
 mod web_search;
 mod windows_sandbox_setup;
+mod workflow_script_read;
+mod workflow_worker_start;
+#[cfg(unix)]
+mod workflow_workspace_grants;

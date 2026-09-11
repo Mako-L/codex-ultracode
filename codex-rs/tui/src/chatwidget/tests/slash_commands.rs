@@ -1052,6 +1052,7 @@ async fn restored_queued_goal_slash_command_emits_set_goal_event() {
 #[test]
 fn merged_history_record_preserves_raw_text_and_rebased_elements() {
     let first = UserMessage {
+        workflow_keyword: None,
         text: "Ask $figma".to_string(),
         local_images: Vec::new(),
         remote_image_urls: Vec::new(),
@@ -1095,6 +1096,7 @@ fn merged_history_record_remaps_override_image_placeholders() {
     let first_placeholder = "[Image #1]";
     let second_placeholder = "[Image #1]";
     let first = UserMessage {
+        workflow_keyword: None,
         text: format!("first {first_placeholder}"),
         local_images: vec![LocalImageAttachment {
             placeholder: first_placeholder.to_string(),
@@ -1108,6 +1110,7 @@ fn merged_history_record_remaps_override_image_placeholders() {
         mention_bindings: Vec::new(),
     };
     let second = UserMessage {
+        workflow_keyword: None,
         text: format!("internal {second_placeholder}"),
         local_images: vec![LocalImageAttachment {
             placeholder: second_placeholder.to_string(),

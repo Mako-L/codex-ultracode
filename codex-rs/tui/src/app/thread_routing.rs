@@ -671,6 +671,7 @@ impl App {
                 final_output_json_schema,
                 collaboration_mode,
                 personality,
+                additional_context,
             } => {
                 let mut should_start_turn = true;
                 if let Some(turn_id) = self.active_turn_id_for_thread(thread_id).await {
@@ -678,7 +679,12 @@ impl App {
                     let mut retried_after_turn_mismatch = false;
                     loop {
                         match app_server
-                            .turn_steer(thread_id, steer_turn_id.clone(), items.to_vec())
+                            .turn_steer(
+                                thread_id,
+                                steer_turn_id.clone(),
+                                items.to_vec(),
+                                additional_context.clone(),
+                            )
                             .await
                         {
                             Ok(_) => return Ok(true),
@@ -764,6 +770,7 @@ impl App {
                             collaboration_mode.clone(),
                             *personality,
                             final_output_json_schema.clone(),
+                            additional_context.clone(),
                         )
                         .await?;
                     if self.active_thread_id == Some(thread_id)

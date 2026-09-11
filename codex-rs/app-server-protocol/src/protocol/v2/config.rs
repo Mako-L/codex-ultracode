@@ -14,6 +14,7 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
+use codex_protocol::config_types::WorkflowSizeGuideline;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
@@ -297,6 +298,14 @@ pub struct Config {
     pub developer_instructions: Option<String>,
     pub compact_prompt: Option<String>,
     pub model_reasoning_effort: Option<ReasoningEffort>,
+    /// Enables workflow orchestration globally. This remains separate from the
+    /// model reasoning effort and the keyword trigger.
+    pub ultracode: Option<bool>,
+    /// Enables the `ultracode:` prompt keyword trigger.
+    pub ultracode_keyword_trigger: Option<bool>,
+    /// Disables all workflow entry points when true.
+    pub disable_workflows: Option<bool>,
+    pub workflow_size_guideline: Option<WorkflowSizeGuideline>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,
     pub service_tier: Option<String>,
@@ -1127,4 +1136,30 @@ pub struct ConfigWarningNotification {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub range: Option<TextRange>,
+}
+
+#[cfg(test)]
+mod ultracode_tests {
+    use super::Config;
+    use codex_protocol::config_types::WorkflowSizeGuideline;
+
+    #[test]
+    fn workflow_settings_survive_legacy_config_json_conversion() {
+        let config: Config = serde_json::from_value(serde_json::json!({
+            "ultracode": true,
+            "ultracode_keyword_trigger": false,
+            "disable_workflows": true
+            ,"workflow_size_guideline": "large"
+        }))
+        .unwrap();
+
+        assert_eq!(config.ultracode, Some(true));
+        assert_eq!(config.ultracode_keyword_trigger, Some(false));
+        assert_eq!(config.disable_workflows, Some(true));
+        assert_eq!(
+            config.workflow_size_guideline,
+            Some(WorkflowSizeGuideline::Large)
+        );
+        assert!(!config.additional.contains_key("ultracode"));
+    }
 }

@@ -64,6 +64,15 @@ impl ConfigManager {
         self.codex_home.as_path()
     }
 
+    pub(crate) fn for_user_profile(&self, profile: codex_config::ProfileV2Name) -> Self {
+        let mut manager = self.clone();
+        manager.loader_overrides.user_config_path = Some(
+            codex_core::config::resolve_profile_v2_config_path(&self.codex_home, &profile),
+        );
+        manager.loader_overrides.user_config_profile = Some(profile);
+        manager
+    }
+
     pub(crate) fn user_config_path(&self) -> std::io::Result<AbsolutePathBuf> {
         self.loader_overrides.user_config_path(self.codex_home())
     }
@@ -156,8 +165,25 @@ impl ConfigManager {
         &self,
         thread_config: &Config,
     ) -> std::io::Result<Config> {
+        // Loader selectors are not session TOML settings. Recover the explicit profile
+        // from the thread's existing user-layer metadata before replacing disk layers.
+        let request_overrides = thread_config
+            .config_layer_stack
+            .get_active_user_layer()
+            .and_then(|layer| match &layer.name {
+                codex_config::ConfigLayerSource::User { profile, .. } => Some(HashMap::from([(
+                    "user_config_profile".to_string(),
+                    serde_json::json!(profile),
+                )])),
+                _ => None,
+            });
         let refreshed_config = self
-            .load_latest_config(Some(thread_config.cwd.to_path_buf()))
+            .load_with_cli_overrides(
+                &self.current_cli_overrides(),
+                request_overrides,
+                ConfigOverrides::default(),
+                Some(thread_config.cwd.to_path_buf()),
+            )
             .await?;
         let mut config = thread_config
             .rebuild_preserving_session_layers(&refreshed_config)
@@ -229,6 +255,21 @@ impl ConfigManager {
                 )
             })?);
         }
+        let mut loader_overrides = self.loader_overrides.clone();
+        // The profile selects a loader input, not a TOML setting. Keep this per request
+        // so concurrently connected frontends never change the daemon's default profile.
+        if let Some(value) = request_overrides.remove("user_config_profile") {
+            let name: Option<String> = serde_json::from_value(value)
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
+            let profile: Option<codex_config::ProfileV2Name> = name
+                .map(|name| name.parse())
+                .transpose()
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
+            loader_overrides.user_config_path = profile.as_ref().map(|name| {
+                codex_core::config::resolve_profile_v2_config_path(&self.codex_home, name)
+            });
+            loader_overrides.user_config_profile = profile;
+        }
         let merged_cli_overrides = cli_overrides
             .iter()
             .cloned()
@@ -241,7 +282,7 @@ impl ConfigManager {
         let mut config = codex_core::config::ConfigBuilder::default()
             .codex_home(self.codex_home.clone())
             .cli_overrides(merged_cli_overrides)
-            .loader_overrides(self.loader_overrides.clone())
+            .loader_overrides(loader_overrides)
             .strict_config(self.strict_config)
             .harness_overrides(typesafe_overrides)
             .fallback_cwd(fallback_cwd)
@@ -366,3 +407,7 @@ pub(crate) fn apply_runtime_feature_enablement(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "config_manager_profile_tests.rs"]
+mod profile_tests;

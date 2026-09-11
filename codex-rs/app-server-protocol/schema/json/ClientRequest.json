@@ -5705,6 +5705,275 @@
         "mode"
       ],
       "type": "object"
+    },
+    "WorkflowAuthorityCaptureParams": {
+      "properties": {
+        "allowIsolatedWorkspaces": {
+          "default": false,
+          "type": "boolean"
+        },
+        "parentThreadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "parentThreadId"
+      ],
+      "type": "object"
+    },
+    "WorkflowCompletionInjectParams": {
+      "properties": {
+        "parentThreadId": {
+          "type": "string"
+        },
+        "runId": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "parentThreadId",
+        "runId",
+        "summary"
+      ],
+      "type": "object"
+    },
+    "WorkflowSaveParams": {
+      "properties": {
+        "authorityDigest": {
+          "type": "string"
+        },
+        "authorityRef": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "parentThreadId": {
+          "type": "string"
+        },
+        "runId": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "sourceDigest": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "authorityDigest",
+        "authorityRef",
+        "name",
+        "parentThreadId",
+        "runId",
+        "scope",
+        "source",
+        "sourceDigest"
+      ],
+      "type": "object"
+    },
+    "WorkflowScriptReadParams": {
+      "properties": {
+        "authorityDigest": {
+          "type": "string"
+        },
+        "authorityRef": {
+          "type": "string"
+        },
+        "parentThreadId": {
+          "type": "string"
+        },
+        "scriptPath": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "authorityDigest",
+        "authorityRef",
+        "parentThreadId",
+        "scriptPath"
+      ],
+      "type": "object"
+    },
+    "WorkflowWorkerStartParams": {
+      "properties": {
+        "agentType": {
+          "description": "Native role name. The host resolves configured roles; this protocol does not freeze an enum.",
+          "type": "string"
+        },
+        "authorityDigest": {
+          "type": "string"
+        },
+        "authorityGeneration": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "authorityRef": {
+          "type": "string"
+        },
+        "effort": {
+          "$ref": "#/definitions/ReasoningEffort"
+        },
+        "effortExplicit": {
+          "default": false,
+          "type": "boolean"
+        },
+        "model": {
+          "type": "string"
+        },
+        "modelExplicit": {
+          "default": false,
+          "type": "boolean"
+        },
+        "parentThreadId": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "readOnly": {
+          "description": "Restrict this worker to the parent's read-only intersection.",
+          "type": "boolean"
+        },
+        "resumeThreadId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "roleDigest": {
+          "type": "string"
+        },
+        "runId": {
+          "type": "string"
+        },
+        "schema": true,
+        "workerId": {
+          "type": "string"
+        },
+        "workspace": {
+          "$ref": "#/definitions/WorkflowWorkspace"
+        }
+      },
+      "required": [
+        "agentType",
+        "authorityDigest",
+        "authorityGeneration",
+        "authorityRef",
+        "effort",
+        "model",
+        "parentThreadId",
+        "prompt",
+        "readOnly",
+        "roleDigest",
+        "runId",
+        "workerId",
+        "workspace"
+      ],
+      "type": "object"
+    },
+    "WorkflowWorkspace": {
+      "properties": {
+        "baseCommit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "isolated": {
+          "type": "boolean"
+        },
+        "workspaceId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "cwd",
+        "isolated"
+      ],
+      "type": "object"
+    },
+    "WorkflowWorkspacePrepareParams": {
+      "properties": {
+        "agentType": {
+          "type": "string"
+        },
+        "authorityDigest": {
+          "type": "string"
+        },
+        "authorityRef": {
+          "type": "string"
+        },
+        "isolation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "previous": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WorkflowWorkspace"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requestedCwd": {
+          "type": "string"
+        },
+        "runId": {
+          "type": "string"
+        },
+        "workerId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "agentType",
+        "authorityDigest",
+        "authorityRef",
+        "requestedCwd",
+        "runId",
+        "workerId"
+      ],
+      "type": "object"
+    },
+    "WorkflowWorkspaceReleaseParams": {
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "workerId": {
+          "type": "string"
+        },
+        "workspaceId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "runId",
+        "workerId"
+      ],
+      "type": "object"
     }
   },
   "description": "Request from the client to the server.",
@@ -5756,6 +6025,174 @@
         "params"
       ],
       "title": "Thread/startRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "workflow/authority/capture"
+          ],
+          "title": "Workflow/authority/captureRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/WorkflowAuthorityCaptureParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Workflow/authority/captureRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "workflow/script/read"
+          ],
+          "title": "Workflow/script/readRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/WorkflowScriptReadParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Workflow/script/readRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "workflow/save"
+          ],
+          "title": "Workflow/saveRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/WorkflowSaveParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Workflow/saveRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "workflow/completion/inject"
+          ],
+          "title": "Workflow/completion/injectRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/WorkflowCompletionInjectParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Workflow/completion/injectRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "workflow/workspace/prepare"
+          ],
+          "title": "Workflow/workspace/prepareRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/WorkflowWorkspacePrepareParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Workflow/workspace/prepareRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "workflow/workspace/release"
+          ],
+          "title": "Workflow/workspace/releaseRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/WorkflowWorkspaceReleaseParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Workflow/workspace/releaseRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "workflow/worker/start"
+          ],
+          "title": "Workflow/worker/startRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/WorkflowWorkerStartParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Workflow/worker/startRequest",
       "type": "object"
     },
     {

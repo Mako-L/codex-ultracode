@@ -474,6 +474,8 @@ pub struct FsWriteFileParams {
     pub data_base64: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub follow_symlinks: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub create_new: Option<bool>,
     pub sandbox: Option<FileSystemSandboxContext>,
 }
 

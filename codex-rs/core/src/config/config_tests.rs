@@ -5073,6 +5073,28 @@ fn filter_plugin_mcp_servers_without_allowlists_does_not_filter_any_plugin() {
 }
 
 #[test]
+fn workflow_child_plugin_filter_matches_canonical_ultracode_ids_only() {
+    assert!(is_ultracode_plugin_config_name("ultracode"));
+    assert!(is_ultracode_plugin_config_name("ultracode@personal"));
+    assert!(is_ultracode_plugin_config_name(
+        "ultracode@ultracode-session-check"
+    ));
+    assert!(!is_ultracode_plugin_config_name(
+        "ultracode-helper@personal"
+    ));
+    assert!(!is_ultracode_plugin_config_name("other@personal"));
+    let visible: Vec<_> = [
+        "ultracode@personal",
+        "other@personal",
+        "ultracode-helper@personal",
+    ]
+    .into_iter()
+    .filter(|name| !is_ultracode_plugin_config_name(name))
+    .collect();
+    assert_eq!(visible, ["other@personal", "ultracode-helper@personal"]);
+}
+
+#[test]
 fn filter_plugin_mcp_servers_by_empty_allowlist_blocks_all() {
     let mut servers = HashMap::from([
         ("server-a".to_string(), stdio_mcp("cmd-a")),
@@ -5585,6 +5607,67 @@ async fn rebuild_preserving_session_layers_refreshes_plugin_derived_mcp_config()
         )])
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn workflow_worker_mcp_exclusion_survives_refresh_and_covers_every_source()
+-> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut worker = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await?;
+    worker.exclude_ultracode_plugin_mcp = true;
+    let mut codex_tui = stdio_mcp("task-tools");
+    codex_tui.disabled_tools = Some(vec!["existing-disabled".to_string()]);
+    let refreshed = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await?;
+    let mut rebuilt = worker.rebuild_preserving_session_layers(&refreshed).await?;
+    assert!(rebuilt.exclude_ultracode_plugin_mcp);
+    rebuilt.mcp_servers.set(HashMap::from([
+        ("ultracode".to_string(), stdio_mcp("recursive-workflows")),
+        ("codex_tui".to_string(), codex_tui),
+        ("sentinel".to_string(), stdio_mcp("sentinel")),
+    ]))?;
+
+    let plugins_manager =
+        plugins_manager_for_config(&rebuilt, auth_manager_from_optional_auth(None));
+    let mcp = rebuilt
+        .to_mcp_config_with_plugin_registrations(
+            &plugins_manager,
+            [
+                McpServerRegistration::from_selected_plugin(
+                    "selected-ultracode".to_string(),
+                    McpPluginAttribution::new(
+                        "ultracode@test".to_string(),
+                        "Ultracode".to_string(),
+                    ),
+                    0,
+                    stdio_mcp("selected-recursive-workflows"),
+                ),
+                McpServerRegistration::from_selected_plugin(
+                    "selected-sentinel".to_string(),
+                    McpPluginAttribution::new("sentinel@test".to_string(), "Sentinel".to_string()),
+                    1,
+                    stdio_mcp("selected-sentinel"),
+                ),
+            ],
+        )
+        .await;
+    let servers = mcp.mcp_server_catalog.configured_servers();
+    assert!(!servers.contains_key("ultracode"));
+    assert!(!servers.contains_key("selected-ultracode"));
+    assert!(servers.contains_key("sentinel"));
+    assert!(servers.contains_key("selected-sentinel"));
+    let disabled = servers["codex_tui"]
+        .disabled_tools
+        .as_deref()
+        .expect("selective task server deny-list");
+    assert!(disabled.iter().any(|tool| tool == "existing-disabled"));
+    assert!(disabled.iter().any(|tool| tool == "workflow"));
     Ok(())
 }
 

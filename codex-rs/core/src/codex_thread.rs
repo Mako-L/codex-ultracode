@@ -1,4 +1,5 @@
 use crate::agent::AgentStatus;
+use crate::config::Config;
 use crate::config::ConstraintResult;
 use crate::context::ContextualUserFragment;
 use crate::context::GuardianReviewEvidence;
@@ -10,6 +11,8 @@ use crate::session::session::Session;
 use crate::session::step_settings::StepSettingsUpdate;
 use codex_diagnostics::Gauge;
 use codex_diagnostics::GaugeGuard;
+use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::SelectedCapabilityRootsStatus;
 use codex_extension_api::ConversationHistorySnapshot;
 use codex_extension_api::ThreadIdleCause;
@@ -53,6 +56,7 @@ use codex_protocol::turn_input::RecoverTurnRequest;
 use codex_protocol::turn_input::StartIfIdleSubmission;
 use codex_protocol::turn_input::SteerSubmission;
 use codex_protocol::turn_input::SuspendTurnOutcome;
+use codex_protocol::turn_input::TurnInput;
 use codex_protocol::turn_input::TurnInputMode;
 use codex_protocol::turn_input::TurnInputRequest;
 use codex_protocol::turn_input::TurnInputSubmission;
@@ -77,6 +81,9 @@ use tokio_util::sync::CancellationToken;
 use codex_rollout::state_db::StateDbHandle;
 
 static LIVE_THREADS: Gauge = Gauge::new("core.threads.live");
+
+#[path = "workflow_access.rs"]
+mod workflow_access;
 
 #[derive(Clone, Debug)]
 pub struct ThreadConfigSnapshot {
@@ -613,6 +620,18 @@ impl CodexThread {
             .await;
     }
 
+    pub async fn inject_workflow_completion(
+        &self,
+        run_id: String,
+        summary: String,
+    ) -> CodexResult<TurnInputSubmission> {
+        self.start_or_steer_turn(TurnInputRequest::new(TurnInput::WorkflowCompletion {
+            run_id,
+            summary,
+        }))
+        .await
+    }
+
     /// Record raw Responses API items without starting a new turn.
     pub async fn inject_response_items(&self, items: Vec<ResponseItem>) -> CodexResult<()> {
         self.inject_response_items_for_turn(items).await?;
@@ -733,6 +752,63 @@ impl CodexThread {
         self.session.thread_config_snapshot().await
     }
 
+    pub async fn effective_config(&self) -> Arc<Config> {
+        self.session.effective_config().await
+    }
+
+    /// Returns the parent thread's filesystem and exact environment sandbox for host-managed
+    /// workflow file operations. This remains available while the model turn is idle.
+    pub async fn workflow_file_access(
+        &self,
+    ) -> Option<(
+        Arc<dyn ExecutorFileSystem>,
+        FileSystemSandboxContext,
+        AbsolutePathBuf,
+    )> {
+        let turn = if let Some((turn, _, _)) = self
+            .session
+            .active_turn_context_and_strict_auto_review()
+            .await
+        {
+            turn
+        } else {
+            self.session.new_default_turn().await
+        };
+        let environment = turn.environments.primary()?;
+        Some((
+            environment.environment.get_filesystem(),
+            environment.sandbox_context(/*additional_permissions*/ None),
+            environment.cwd().to_abs_path().ok()?,
+        ))
+    }
+
+    /// Runs an idle host-managed workflow save through the configured Guardian reviewer.
+    pub async fn review_workflow_save(&self, file: AbsolutePathBuf, patch: String) -> bool {
+        let cwd = self.config_snapshot().await.cwd().clone();
+        let turn = self.session.new_default_turn().await;
+        let request = crate::guardian::GuardianApprovalRequest::ApplyPatch {
+            id: crate::guardian::new_guardian_review_id(),
+            cwd,
+            files: vec![file],
+            patch,
+        };
+        matches!(
+            crate::guardian::review_approval_request(
+                &self.session,
+                turn,
+                crate::guardian::new_guardian_review_id(),
+                request,
+                crate::tools::sandboxing::ApprovalRequestReasons {
+                    approval: Some("Save a completed dynamic workflow".to_string()),
+                    retry: None,
+                },
+            )
+            .await,
+            codex_protocol::protocol::ReviewDecision::Approved
+                | codex_protocol::protocol::ReviewDecision::ApprovedForSession
+        )
+    }
+
     /// Returns the active turn's reviewer, including live updates, or the thread default.
     pub async fn approvals_reviewer_for_turn(&self, turn_id: &str) -> ApprovalsReviewer {
         if let Some((turn, settings, _)) = self
@@ -807,6 +883,29 @@ impl CodexThread {
         let config = self.session.get_config().await;
         let (mcp_config, runtime_context) = self.runtime_mcp_config_and_context(&config).await;
         (Arc::new(mcp_config), runtime_context)
+    }
+
+    /// Returns the enabled plugin identities and resolved roots for host-owned workflow catalogs.
+    pub async fn workflow_plugin_roots(&self) -> Vec<(String, PathBuf)> {
+        let config = self.session.get_config().await;
+        self.session
+            .services
+            .plugins_manager
+            .plugins_for_config(&config.plugins_config_input())
+            .await
+            .plugins()
+            .iter()
+            .filter(|plugin| plugin.is_active())
+            .map(|plugin| {
+                (
+                    plugin
+                        .plugin_namespace
+                        .clone()
+                        .unwrap_or_else(|| plugin.config_name.clone()),
+                    plugin.root.to_path_buf(),
+                )
+            })
+            .collect()
     }
 
     pub fn multi_agent_version(&self) -> Option<MultiAgentVersion> {

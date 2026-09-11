@@ -251,6 +251,7 @@ pub(crate) struct BottomPane {
     status: Option<StatusIndicatorWidget>,
     /// Running-hook summary supplied by the lifecycle owner after its reveal delay.
     hook_status_message: Option<String>,
+    workflow_status: Option<Line<'static>>,
     inline_banner: Option<actionable_banner::InlineBanner>,
     /// Streaming may drop the row without losing its elapsed time or modal pause.
     status_timer: crate::status_indicator_widget::StatusTimer,
@@ -325,6 +326,7 @@ impl BottomPane {
             is_task_running: false,
             status: None,
             hook_status_message: None,
+            workflow_status: None,
             inline_banner: None,
             status_timer: crate::status_indicator_widget::StatusTimer::default(),
             unified_exec_footer: UnifiedExecFooter::new(),
@@ -510,6 +512,11 @@ impl BottomPane {
 
     pub fn set_service_tier_commands(&mut self, commands: Vec<ServiceTierCommand>) {
         self.composer.set_service_tier_commands(commands);
+        self.request_redraw();
+    }
+
+    pub fn set_workflow_commands(&mut self, commands: Vec<slash_commands::WorkflowCommand>) {
+        self.composer.set_workflow_commands(commands);
         self.request_redraw();
     }
 
@@ -1012,6 +1019,16 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn restore_workflow_keyword(&mut self, opt_in: Option<bool>) {
+        self.composer.restore_workflow_keyword(opt_in);
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_workflow_keyword_enabled(&mut self, enabled: bool) {
+        self.composer.set_workflow_keyword_enabled(enabled);
+        self.request_redraw();
+    }
+
     /// Update the status indicator header (defaults to "Working") and details below it.
     ///
     /// Passing `None` clears any existing details. Returns whether the active status indicator
@@ -1434,6 +1451,13 @@ impl BottomPane {
     pub(crate) fn set_unified_exec_processes(&mut self, processes: Vec<String>) {
         if self.unified_exec_footer.set_processes(processes) {
             self.sync_status_inline_message();
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn set_workflow_status(&mut self, status: Option<Line<'static>>) {
+        if self.workflow_status != status {
+            self.workflow_status = status;
             self.request_redraw();
         }
     }
@@ -1917,11 +1941,18 @@ impl BottomPane {
                 );
             }
             let has_pending_thread_approvals = !self.pending_thread_approvals.is_empty();
+            if let Some(status) = &self.workflow_status {
+                flex.push(
+                    /*flex*/ 0,
+                    RenderableItem::Owned(Box::new(status.clone())),
+                );
+            }
             let has_pending_input = !self.pending_input_preview.queued_messages.is_empty()
                 || !self.pending_input_preview.pending_steers.is_empty()
                 || !self.pending_input_preview.rejected_steers.is_empty();
             let has_status_or_footer = self.status_widget().is_some()
                 || self.hook_status_message.is_some()
+                || self.workflow_status.is_some()
                 || !self.unified_exec_footer.is_empty();
             let has_inline_previews = has_pending_thread_approvals || has_pending_input;
             if has_inline_previews && has_status_or_footer {
@@ -2084,6 +2115,21 @@ mod tests {
 
     fn test_pane(app_event_tx: AppEventSender) -> BottomPane {
         test_pane_with_disable_paste_burst(app_event_tx, /*disable_paste_burst*/ false)
+    }
+
+    #[test]
+    fn workflow_status_footer_renders_above_composer() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let mut pane = test_pane(AppEventSender::new(tx_raw));
+        pane.set_workflow_status(Some(Line::from(
+            "  1 workflow · 26 agents · ⚠ Large workflow · /workflows to stop",
+        )));
+        assert_snapshot!(
+            "workflow_status_footer",
+            render_snapshot(&pane, Rect::new(0, 0, 96, 8))
+        );
+        pane.set_workflow_status(None);
+        assert!(!render_snapshot(&pane, Rect::new(0, 0, 96, 8)).contains("workflow"));
     }
 
     fn test_pane_with_disable_paste_burst(

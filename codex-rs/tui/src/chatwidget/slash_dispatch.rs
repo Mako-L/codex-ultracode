@@ -11,7 +11,7 @@ use crate::bottom_pane::prompt_args::parse_slash_name;
 use crate::bottom_pane::slash_commands::BuiltinCommandFlags;
 use crate::bottom_pane::slash_commands::ServiceTierCommand;
 use crate::bottom_pane::slash_commands::SlashCommandItem;
-use crate::bottom_pane::slash_commands::find_slash_command;
+use crate::bottom_pane::slash_commands::find_slash_command_with_workflows;
 use crate::goal_display::GOAL_USAGE;
 use crate::goal_files::GoalDraft;
 
@@ -145,6 +145,12 @@ impl ChatWidget {
     }
 
     pub(super) fn dispatch_command(&mut self, cmd: SlashCommand) {
+        if self.config.disable_workflows
+            && matches!(cmd, SlashCommand::Workflows | SlashCommand::Effort)
+        {
+            self.add_error_message("Workflows are disabled by configuration.".into());
+            return;
+        }
         if !self.ensure_slash_command_allowed_in_side_conversation(cmd) {
             return;
         }
@@ -318,6 +324,21 @@ impl ChatWidget {
                         Some(GOAL_USAGE_HINT.to_string()),
                     );
                 }
+            }
+            SlashCommand::Workflows => {
+                self.app_event_tx
+                    .send(AppEvent::Workflow(crate::app_event::WorkflowEvent::Open {
+                        effort: None,
+                    }));
+            }
+            SlashCommand::Effort => {
+                self.app_event_tx
+                    .send(AppEvent::Workflow(crate::app_event::WorkflowEvent::Open {
+                        effort: Some(String::new()),
+                    }));
+            }
+            SlashCommand::Config => {
+                self.open_workflow_config_popup();
             }
             SlashCommand::Side | SlashCommand::Btw => {
                 self.request_empty_side_conversation(cmd);
@@ -691,6 +712,7 @@ impl ChatWidget {
             remote_image_urls,
             text_elements,
             mention_bindings,
+            workflow_keyword: None,
         }
     }
 
@@ -699,6 +721,12 @@ impl ChatWidget {
         cmd: SlashCommand,
         prepared: PreparedSlashCommandArgs,
     ) {
+        if self.config.disable_workflows
+            && matches!(cmd, SlashCommand::Workflows | SlashCommand::Effort)
+        {
+            self.add_error_message("Workflows are disabled by configuration.".into());
+            return;
+        }
         let PreparedSlashCommandArgs {
             args,
             text_elements,
@@ -916,6 +944,7 @@ impl ChatWidget {
                                 remote_image_urls: draft.remote_image_urls,
                                 text_elements,
                                 mention_bindings: Vec::new(),
+                                workflow_keyword: None,
                             },
                             QueuedInputAction::ParseSlash,
                             draft.pending_pastes,
@@ -982,6 +1011,22 @@ impl ChatWidget {
             SlashCommand::Pets if !trimmed.is_empty() => {
                 self.select_pet_by_id(args);
             }
+            SlashCommand::Effort if !trimmed.is_empty() => {
+                self.app_event_tx
+                    .send(AppEvent::Workflow(crate::app_event::WorkflowEvent::Open {
+                        effort: Some(trimmed.to_ascii_lowercase()),
+                    }));
+            }
+            SlashCommand::Config if !trimmed.is_empty() => {
+                match parse_workflow_size_config(trimmed) {
+                    Some(guideline) => self
+                        .app_event_tx
+                        .send(AppEvent::PersistWorkflowSizeGuideline { guideline }),
+                    None => self.add_error_message(
+                        "Expected workflowSizeGuideline=unrestricted|small|medium|large".into(),
+                    ),
+                }
+            }
             _ => self.dispatch_command(cmd),
         }
         if source == SlashCommandDispatchSource::Live && cmd != SlashCommand::Goal {
@@ -1004,6 +1049,7 @@ impl ChatWidget {
             remote_image_urls,
             text_elements,
             mention_bindings,
+            workflow_keyword,
         } = user_message;
         let Some((name, rest, rest_offset)) = parse_slash_name(&text) else {
             self.submit_user_message(UserMessage {
@@ -1012,6 +1058,7 @@ impl ChatWidget {
                 remote_image_urls,
                 text_elements,
                 mention_bindings,
+                workflow_keyword,
             });
             return QueueDrain::Stop;
         };
@@ -1023,14 +1070,18 @@ impl ChatWidget {
                 remote_image_urls,
                 text_elements,
                 mention_bindings,
+                workflow_keyword,
             });
             return QueueDrain::Stop;
         }
 
         let service_tier_commands = self.current_model_service_tier_commands();
-        let Some(command) =
-            find_slash_command(name, self.builtin_command_flags(), &service_tier_commands)
-        else {
+        let Some(command) = find_slash_command_with_workflows(
+            name,
+            self.builtin_command_flags(),
+            &service_tier_commands,
+            &self.workflow_commands,
+        ) else {
             self.add_info_message(
                 format!(
                     r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#
@@ -1050,7 +1101,26 @@ impl ChatWidget {
                     self.handle_service_tier_command_dispatch(command);
                     QueueDrain::Continue
                 }
+                SlashCommandItem::Workflow(command) => {
+                    self.app_event_tx.send(AppEvent::Workflow(
+                        crate::app_event::WorkflowEvent::RunSaved {
+                            name: command.name,
+                            args: None,
+                        },
+                    ));
+                    QueueDrain::Continue
+                }
             };
+        }
+
+        if let SlashCommandItem::Workflow(command) = &command {
+            self.app_event_tx.send(AppEvent::Workflow(
+                crate::app_event::WorkflowEvent::RunSaved {
+                    name: command.name.clone(),
+                    args: Some(rest.trim().to_string()),
+                },
+            ));
+            return QueueDrain::Continue;
         }
 
         if !command.supports_inline_args() {
@@ -1060,6 +1130,7 @@ impl ChatWidget {
                 remote_image_urls,
                 text_elements,
                 mention_bindings,
+                workflow_keyword,
             });
             return QueueDrain::Stop;
         }
@@ -1070,6 +1141,7 @@ impl ChatWidget {
                 remote_image_urls,
                 text_elements,
                 mention_bindings,
+                workflow_keyword,
             });
             return QueueDrain::Stop;
         };
@@ -1172,6 +1244,9 @@ impl ChatWidget {
             | SlashCommand::Personality
             | SlashCommand::Plan
             | SlashCommand::Goal
+            | SlashCommand::Workflows
+            | SlashCommand::Effort
+            | SlashCommand::Config
             | SlashCommand::Side
             | SlashCommand::Btw
             | SlashCommand::Keymap
@@ -1245,5 +1320,40 @@ impl ChatWidget {
         ));
         self.bottom_pane.drain_pending_submission_state();
         false
+    }
+}
+
+fn parse_workflow_size_config(
+    value: &str,
+) -> Option<codex_protocol::config_types::WorkflowSizeGuideline> {
+    use codex_protocol::config_types::WorkflowSizeGuideline::*;
+    match value {
+        "workflowSizeGuideline=unrestricted" => Some(Unrestricted),
+        "workflowSizeGuideline=small" => Some(Small),
+        "workflowSizeGuideline=medium" => Some(Medium),
+        "workflowSizeGuideline=large" => Some(Large),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod workflow_size_config_tests {
+    use super::parse_workflow_size_config;
+    use codex_protocol::config_types::WorkflowSizeGuideline::*;
+
+    #[test]
+    fn parses_only_documented_workflow_size_assignment() {
+        assert_eq!(
+            parse_workflow_size_config("workflowSizeGuideline=small"),
+            Some(Small)
+        );
+        assert_eq!(
+            parse_workflow_size_config("workflow_size_guideline=small"),
+            None
+        );
+        assert_eq!(
+            parse_workflow_size_config("workflowSizeGuideline=huge"),
+            None
+        );
     }
 }

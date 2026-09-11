@@ -238,7 +238,12 @@ impl App {
                 } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'c')
             )
         {
-            let mut running_thread_id = if self.chat_widget.is_agent_turn_running() {
+            let mut running_thread_id = if self.chat_widget.is_agent_turn_running()
+                || self
+                    .workflow_sessions
+                    .values()
+                    .any(|session| session.active_runs)
+            {
                 self.chat_widget.thread_id()
             } else {
                 None

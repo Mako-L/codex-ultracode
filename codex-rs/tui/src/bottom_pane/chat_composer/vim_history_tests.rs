@@ -429,6 +429,7 @@ fn undo_and_redo_use_configured_bindings_and_support_unbinding() {
             .0,
         InputResult::Submitted {
             text: "abc".to_owned(),
+            workflow_keyword: None,
             text_elements: Vec::new()
         }
     );

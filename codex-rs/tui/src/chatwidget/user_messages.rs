@@ -29,6 +29,8 @@ use super::ChatWidget;
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct UserMessage {
     pub(crate) text: String,
+    /// The interactive draft's explicit keyword choice, independent of visible text.
+    pub(crate) workflow_keyword: Option<bool>,
     pub(crate) local_images: Vec<LocalImageAttachment>,
     /// Remote image attachments represented as URLs (for example data URLs)
     /// provided by app-server clients.
@@ -102,6 +104,7 @@ pub(super) enum QueueDrain {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub(super) struct ThreadComposerState {
     pub(super) text: String,
+    pub(super) workflow_keyword: Option<bool>,
     pub(super) local_images: Vec<LocalImageAttachment>,
     pub(super) remote_image_urls: Vec<String>,
     pub(super) text_elements: Vec<TextElement>,
@@ -149,6 +152,7 @@ impl From<String> for UserMessage {
     fn from(text: String) -> Self {
         Self {
             text,
+            workflow_keyword: None,
             local_images: Vec::new(),
             remote_image_urls: Vec::new(),
             // Plain text conversion has no UI element ranges.
@@ -162,6 +166,7 @@ impl From<&str> for UserMessage {
     fn from(text: &str) -> Self {
         Self {
             text: text.to_string(),
+            workflow_keyword: None,
             local_images: Vec::new(),
             remote_image_urls: Vec::new(),
             // Plain text conversion has no UI element ranges.
@@ -197,6 +202,7 @@ pub(crate) fn create_initial_user_message(
             .collect();
         Some(UserMessage {
             text,
+            workflow_keyword: None,
             local_images,
             remote_image_urls: Vec::new(),
             text_elements,
@@ -333,6 +339,7 @@ fn remap_placeholders_for_message_and_history_record(
         local_images,
         remote_image_urls,
         mention_bindings,
+        workflow_keyword,
     } = message;
     let (mapping, remapped_images) = build_placeholder_mapping(local_images, next_label);
     let (text, text_elements) = remap_placeholders_in_text(text, text_elements, &mapping);
@@ -355,6 +362,7 @@ fn remap_placeholders_for_message_and_history_record(
             remote_image_urls,
             text_elements,
             mention_bindings,
+            workflow_keyword,
         },
         history_record,
     )
@@ -406,6 +414,7 @@ pub(super) fn merge_user_messages(messages: Vec<UserMessage>) -> UserMessage {
 fn merge_remapped_user_messages(messages: impl IntoIterator<Item = UserMessage>) -> UserMessage {
     let mut combined = UserMessage {
         text: String::new(),
+        workflow_keyword: None,
         text_elements: Vec::new(),
         local_images: Vec::new(),
         remote_image_urls: Vec::new(),
@@ -422,6 +431,7 @@ fn merge_remapped_user_messages(messages: impl IntoIterator<Item = UserMessage>)
             local_images,
             remote_image_urls,
             mention_bindings,
+            workflow_keyword,
         } = message;
         append_text_with_rebased_elements(
             &mut combined.text,
@@ -432,6 +442,7 @@ fn merge_remapped_user_messages(messages: impl IntoIterator<Item = UserMessage>)
         combined.local_images.extend(local_images);
         combined.remote_image_urls.extend(remote_image_urls);
         combined.mention_bindings.extend(mention_bindings);
+        combined.workflow_keyword = combined.workflow_keyword.max(workflow_keyword);
     }
 
     combined

@@ -1793,6 +1793,16 @@ impl Session {
             .thread_config_snapshot(self.services.turn_environments.selections())
     }
 
+    pub(crate) async fn effective_config(&self) -> Arc<Config> {
+        if let Some(active) = self.active_turn.lock().await.as_ref()
+            && let Some(task) = active.task.as_ref()
+        {
+            return Arc::clone(&task.turn_context.config);
+        }
+        let state = self.state.lock().await;
+        Arc::new(self.build_effective_session_config(&state.session_configuration))
+    }
+
     pub(crate) async fn thread_settings_snapshot(&self) -> ThreadSettingsSnapshot {
         let state = self.state.lock().await;
         state

@@ -35,6 +35,7 @@ use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadGoalStatus;
 use codex_app_server_protocol::ThreadItemsListResponse;
+use codex_app_server_protocol::WorkflowSaveResponse;
 use codex_connectors::AppInfo;
 use codex_file_search::FileMatch;
 use codex_message_history::HistoryBatchCursor;
@@ -222,6 +223,7 @@ pub(crate) struct AgentsOverviewThreadRefresh {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, IntoStaticStr)]
 pub(crate) enum AppEvent {
+    Workflow(WorkflowEvent),
     /// Open the daemon-wide overview of recent and locally retained root sessions.
     OpenAgentsOverview,
     /// Update the daemon-wide overview after a background thread listing finishes.
@@ -987,6 +989,10 @@ pub(crate) enum AppEvent {
         personality: Personality,
     },
 
+    PersistWorkflowSizeGuideline {
+        guideline: codex_protocol::config_types::WorkflowSizeGuideline,
+    },
+
     /// Persist the selected service tier to the appropriate config.
     PersistServiceTierSelection {
         service_tier: Option<String>,
@@ -1381,6 +1387,66 @@ pub(crate) enum AppEvent {
         turn_revision: usize,
         result: Result<String, String>,
     },
+}
+
+#[derive(Debug)]
+pub(crate) enum WorkflowEvent {
+    LoadCatalog {
+        thread_id: String,
+    },
+    RunSaved {
+        name: String,
+        args: Option<String>,
+    },
+    RunSavedConsent {
+        name: String,
+        args: Option<String>,
+        choice: WorkflowConsentChoice,
+    },
+    ToolCall {
+        request_id: codex_app_server_protocol::RequestId,
+        params: codex_app_server_protocol::DynamicToolCallParams,
+    },
+    Consent {
+        request_id: codex_app_server_protocol::RequestId,
+        params: codex_app_server_protocol::DynamicToolCallParams,
+        choice: WorkflowConsentChoice,
+    },
+    ViewScript(String),
+    Open {
+        effort: Option<String>,
+    },
+    Ready {
+        parent_thread_id: String,
+        effort: Option<String>,
+        result: Result<(crate::ultracode_bridge::UltracodeBridge, serde_json::Value), String>,
+    },
+    Refresh,
+    RunChanged {
+        bridge: crate::ultracode_bridge::UltracodeBridge,
+        run_id: String,
+    },
+    Snapshot {
+        bridge: crate::ultracode_bridge::UltracodeBridge,
+        result: Result<serde_json::Value, String>,
+    },
+    HostRequest {
+        bridge: crate::ultracode_bridge::UltracodeBridge,
+        id: String,
+        method: String,
+        params: serde_json::Value,
+    },
+    SaveCompleted {
+        thread_id: String,
+        result: Result<WorkflowSaveResponse, String>,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum WorkflowConsentChoice {
+    Run,
+    Remember,
+    Cancel,
 }
 
 /// Named profile selection to apply after any required UI guardrails complete.

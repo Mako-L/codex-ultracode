@@ -1,0 +1,39 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "authorityGeneration": {
+      "format": "uint64",
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "baseCommit": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "isolated": {
+      "type": "boolean"
+    },
+    "roleDigest": {
+      "type": "string"
+    },
+    "workspaceId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "authorityGeneration",
+    "cwd",
+    "isolated",
+    "roleDigest"
+  ],
+  "title": "WorkflowWorkspacePrepareResponse",
+  "type": "object"
+}

@@ -13,8 +13,9 @@ use crate::bottom_pane::prompt_args::parse_slash_name;
 use crate::bottom_pane::slash_commands::BuiltinCommandFlags;
 use crate::bottom_pane::slash_commands::ServiceTierCommand;
 use crate::bottom_pane::slash_commands::SlashCommandItem;
-use crate::bottom_pane::slash_commands::find_slash_command;
-use crate::bottom_pane::slash_commands::has_slash_command_prefix;
+use crate::bottom_pane::slash_commands::WorkflowCommand;
+use crate::bottom_pane::slash_commands::find_slash_command_with_workflows;
+use crate::bottom_pane::slash_commands::has_slash_command_prefix_with_workflows;
 use crate::slash_command::SlashCommand;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
@@ -48,6 +49,7 @@ pub(super) struct SlashInput<'a> {
     is_bash_mode: bool,
     command_flags: BuiltinCommandFlags,
     service_tier_commands: &'a [ServiceTierCommand],
+    workflow_commands: &'a [WorkflowCommand],
 }
 
 impl<'a> SlashInput<'a> {
@@ -56,12 +58,14 @@ impl<'a> SlashInput<'a> {
         is_bash_mode: bool,
         command_flags: BuiltinCommandFlags,
         service_tier_commands: &'a [ServiceTierCommand],
+        workflow_commands: &'a [WorkflowCommand],
     ) -> Self {
         Self {
             enabled,
             is_bash_mode,
             command_flags,
             service_tier_commands,
+            workflow_commands,
         }
     }
 
@@ -165,11 +169,16 @@ impl<'a> SlashInput<'a> {
             return rest.is_empty();
         }
 
-        has_slash_command_prefix(name, self.command_flags, self.service_tier_commands)
+        has_slash_command_prefix_with_workflows(
+            name,
+            self.command_flags,
+            self.service_tier_commands,
+            self.workflow_commands,
+        )
     }
 
     pub(super) fn command_popup(&self, filter_text: &str) -> CommandPopup {
-        let mut command_popup = CommandPopup::new(
+        let mut command_popup = CommandPopup::new_with_workflows(
             CommandPopupFlags {
                 collaboration_modes_enabled: self.command_flags.collaboration_modes_enabled,
                 connectors_enabled: self.command_flags.connectors_enabled,
@@ -182,13 +191,19 @@ impl<'a> SlashInput<'a> {
                 side_conversation_active: self.command_flags.side_conversation_active,
             },
             self.service_tier_commands.to_vec(),
+            self.workflow_commands.to_vec(),
         );
         command_popup.on_composer_text_change(filter_text.to_string());
         command_popup
     }
 
     pub(super) fn command(&self, name: &str) -> Option<SlashCommandItem> {
-        find_slash_command(name, self.command_flags, self.service_tier_commands)
+        find_slash_command_with_workflows(
+            name,
+            self.command_flags,
+            self.service_tier_commands,
+            self.workflow_commands,
+        )
     }
 }
 
@@ -351,6 +366,7 @@ impl ChatComposer {
                                 )
                             }
                             CommandItem::ServiceTier(_) => false,
+                            CommandItem::Workflow(_) => false,
                         };
                         if !command_is_allowed {
                             return (InputResult::ParentOwnedInputBlocked, true);
@@ -374,6 +390,7 @@ impl ChatComposer {
                             CommandItem::ServiceTier(command) => {
                                 InputResult::ServiceTierCommand(command)
                             }
+                            CommandItem::Workflow(command) => InputResult::WorkflowCommand(command),
                         },
                         true,
                     );
@@ -389,11 +406,10 @@ impl ChatComposer {
         &mut self,
         selected_cmd: &CommandItem,
     ) -> bool {
-        let CommandItem::Builtin(cmd) = selected_cmd else {
-            return false;
-        };
-        if !cmd.supports_inline_args() {
-            return false;
+        match selected_cmd {
+            CommandItem::Builtin(cmd) if !cmd.supports_inline_args() => return false,
+            CommandItem::ServiceTier(_) => return false,
+            CommandItem::Builtin(_) | CommandItem::Workflow(_) => {}
         }
 
         let text = self.draft.textarea.text();
@@ -412,15 +428,16 @@ impl ChatComposer {
         if rest_after_token_is_empty && (cursor <= 1 || cursor >= command_token_end) {
             return false;
         }
-        let replace_end =
-            if cursor <= 1 || (typed_command_name == cmd.command() && rest_after_token_is_empty) {
-                command_token_end
-            } else {
-                cursor
-            };
+        let replace_end = if cursor <= 1
+            || (typed_command_name == selected_cmd.command() && rest_after_token_is_empty)
+        {
+            command_token_end
+        } else {
+            cursor
+        };
         let tail = &text[replace_end..];
         let tail_starts_with_whitespace = tail.chars().next().is_some_and(char::is_whitespace);
-        let selected_command_text = format!("/{}", cmd.command());
+        let selected_command_text = format!("/{}", selected_cmd.command());
         let replacement = if tail_starts_with_whitespace {
             selected_command_text
         } else {

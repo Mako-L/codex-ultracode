@@ -93,6 +93,7 @@ async fn file_system_operations_can_reject_junctions_in_any_path_component(
     };
     let no_follow_write = WriteFileOptions {
         follow_symlinks: false,
+        create_new: false,
     };
     let no_follow_metadata = GetMetadataOptions {
         follow_symlinks: false,
@@ -331,6 +332,7 @@ async fn file_system_no_follow_operations_reject_named_pipes(
             b"must not be written".to_vec(),
             WriteFileOptions {
                 follow_symlinks: false,
+                create_new: false,
             },
             /*sandbox*/ None,
         ),

@@ -93,8 +93,19 @@ impl App {
         app_server_client: &AppServerSession,
         notification: ServerNotification,
     ) {
+        self.handle_workflow_notification(&notification);
         if let ServerNotification::ThreadStatusChanged(status) = &notification {
             let _ = self.dynamic_tool_status_updates.send(status.clone());
+        }
+        if !self.config.disable_workflows
+            && let ServerNotification::ThreadStarted(started) = &notification
+            && !matches!(&started.thread.source, SessionSource::SubAgent(_))
+        {
+            self.app_event_tx.send(AppEvent::Workflow(
+                crate::app_event::WorkflowEvent::LoadCatalog {
+                    thread_id: started.thread.id.clone(),
+                },
+            ));
         }
 
         if let ServerNotification::ThreadStarted(started) = &notification
@@ -340,6 +351,15 @@ impl App {
         request: ServerRequest,
     ) {
         if let ServerRequest::DynamicToolCall { request_id, params } = &request {
+            if params.tool == "workflow" {
+                self.app_event_tx.send(AppEvent::Workflow(
+                    crate::app_event::WorkflowEvent::ToolCall {
+                        request_id: request_id.clone(),
+                        params: params.clone(),
+                    },
+                ));
+                return;
+            }
             if self.dynamic_tool_tasks.contains_key(request_id)
                 || (params.namespace.as_deref() != Some(crate::dynamic_tools::NAMESPACE)
                     && !app_server_client.uses_embedded_app_server())

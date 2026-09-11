@@ -625,10 +625,17 @@ impl DirectFileSystem {
     ) -> FileSystemResult<()> {
         reject_sandbox_context(sandbox)?;
         let path = path.to_abs_path()?;
-        if options.follow_symlinks {
+        if options.follow_symlinks && options.create_new {
+            let mut file = tokio::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path.as_path())
+                .await?;
+            tokio::io::AsyncWriteExt::write_all(&mut file, &contents).await
+        } else if options.follow_symlinks {
             tokio::fs::write(path.as_path(), contents).await
         } else {
-            no_follow::write_file(path.as_path(), contents).await
+            no_follow::write_file(path.as_path(), contents, options.create_new).await
         }
     }
 

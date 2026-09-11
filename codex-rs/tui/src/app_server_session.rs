@@ -30,6 +30,7 @@ use codex_app_server_client::AppServerPath;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::Account;
+use codex_app_server_protocol::AdditionalContextEntry;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ClientRequest;
@@ -308,6 +309,9 @@ pub(crate) struct AppServerSession {
     managed_new_thread_defaults: Option<NewThreadModelDefaults>,
     external_agent_config_import_completion_pending: AtomicBool,
     dynamic_tool_mcp: Option<Arc<DynamicToolMcpServer>>,
+    workflows_disabled: bool,
+    workflow_response_bridges:
+        std::sync::Mutex<HashMap<String, crate::ultracode_bridge::UltracodeBridge>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -378,6 +382,66 @@ pub(crate) enum TurnPermissionsOverride {
 pub(crate) struct UnsupportedLegacyPermissionProfile;
 
 impl AppServerSession {
+    pub(crate) async fn workflow_authority_capture(
+        &mut self,
+        params: codex_app_server_protocol::WorkflowAuthorityCaptureParams,
+    ) -> Result<codex_app_server_protocol::WorkflowAuthorityCaptureResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::WorkflowAuthorityCapture { request_id, params })
+            .await
+            .wrap_err("workflow/authority/capture failed")
+    }
+    pub(crate) async fn workflow_save(
+        &mut self,
+        params: codex_app_server_protocol::WorkflowSaveParams,
+    ) -> Result<codex_app_server_protocol::WorkflowSaveResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::WorkflowSave { request_id, params })
+            .await
+            .wrap_err("workflow/save failed")
+    }
+    pub(crate) async fn workflow_completion_inject(
+        &mut self,
+        params: codex_app_server_protocol::WorkflowCompletionInjectParams,
+    ) -> Result<codex_app_server_protocol::WorkflowCompletionInjectResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::WorkflowCompletionInject { request_id, params })
+            .await
+            .wrap_err("workflow/completion/inject failed")
+    }
+    pub(crate) async fn workflow_workspace_prepare(
+        &mut self,
+        params: codex_app_server_protocol::WorkflowWorkspacePrepareParams,
+    ) -> Result<codex_app_server_protocol::WorkflowWorkspacePrepareResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::WorkflowWorkspacePrepare { request_id, params })
+            .await
+            .wrap_err("workflow/workspace/prepare failed")
+    }
+    pub(crate) async fn workflow_workspace_release(
+        &mut self,
+        params: codex_app_server_protocol::WorkflowWorkspaceReleaseParams,
+    ) -> Result<codex_app_server_protocol::WorkflowWorkspaceReleaseResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::WorkflowWorkspaceRelease { request_id, params })
+            .await
+            .wrap_err("workflow/workspace/release failed")
+    }
+    pub(crate) async fn workflow_worker_start(
+        &mut self,
+        params: codex_app_server_protocol::WorkflowWorkerStartParams,
+    ) -> Result<codex_app_server_protocol::WorkflowWorkerStartResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::WorkflowWorkerStart { request_id, params })
+            .await
+            .wrap_err("workflow/worker/start failed")
+    }
     pub(crate) fn new(client: AppServerClient, thread_params_mode: ThreadParamsMode) -> Self {
         Self {
             client,
@@ -396,6 +460,8 @@ impl AppServerSession {
             managed_new_thread_defaults: None,
             external_agent_config_import_completion_pending: AtomicBool::new(false),
             dynamic_tool_mcp: None,
+            workflows_disabled: false,
+            workflow_response_bridges: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -405,6 +471,7 @@ impl AppServerSession {
         app_event_tx: AppEventSender,
         status_updates: tokio::sync::broadcast::Sender<ThreadStatusChangedNotification>,
     ) -> std::io::Result<()> {
+        self.workflows_disabled = config.disable_workflows;
         if self.uses_embedded_app_server() {
             return Ok(());
         }
@@ -441,6 +508,24 @@ impl AppServerSession {
             self.remote_cwd_override(),
             /*session_start_source*/ None,
         );
+        #[cfg(unix)]
+        if !config.disable_workflows
+            && !self.uses_remote_workspace()
+            && (std::env::var_os("ULTRACODE_PLUGIN_ROOT").is_some()
+                || std::env::var_os("CODEX_PLUGIN_ROOT").is_some())
+        {
+            self.dynamic_tool_mcp = Some(Arc::new(
+                DynamicToolMcpServer::connect_supervisor(
+                    &config.codex_home,
+                    self.request_handle(),
+                    thread_start_params,
+                    app_event_tx,
+                    managed_requirement,
+                )
+                .await?,
+            ));
+            return Ok(());
+        }
         self.dynamic_tool_mcp = Some(Arc::new(
             DynamicToolMcpServer::start(
                 self.request_handle(),
@@ -448,17 +533,31 @@ impl AppServerSession {
                 app_event_tx,
                 status_updates,
                 managed_requirement,
+                None,
+                !config.disable_workflows,
             )
             .await?,
         ));
         Ok(())
     }
 
+    pub(crate) fn workflow_host_enabled(&self) -> bool {
+        self.dynamic_tool_mcp
+            .as_ref()
+            .is_some_and(|server| server.supervisor.is_some())
+    }
+
     pub(crate) fn thread_tool_transport(&self) -> ThreadToolTransport {
         if self.uses_embedded_app_server() {
-            ThreadToolTransport::Disabled
+            if self.workflows_disabled {
+                ThreadToolTransport::Disabled
+            } else {
+                ThreadToolTransport::Workflow
+            }
         } else if let Some(server) = self.dynamic_tool_mcp.as_ref() {
             ThreadToolTransport::Mcp(Arc::clone(server))
+        } else if self.workflows_disabled {
+            ThreadToolTransport::Tasks
         } else {
             ThreadToolTransport::Dynamic
         }
@@ -490,6 +589,8 @@ impl AppServerSession {
 
     /// Carry capabilities that may exist only in memory when the optional cache is unwritable.
     pub(crate) fn inherit_task_tool_capabilities(&mut self, previous: &Self) {
+        *self.workflow_response_bridges.lock().unwrap() =
+            previous.workflow_response_bridges.lock().unwrap().clone();
         self.task_tool_threads.extend(&previous.task_tool_threads);
     }
 
@@ -1210,6 +1311,7 @@ impl AppServerSession {
         collaboration_mode: Option<codex_protocol::config_types::CollaborationMode>,
         personality: Option<codex_protocol::config_types::Personality>,
         output_schema: Option<serde_json::Value>,
+        additional_context: Option<HashMap<String, AdditionalContextEntry>>,
     ) -> Result<TurnStartResponse> {
         let request_id = self.next_request_id();
         let (sandbox_policy, permissions) =
@@ -1224,7 +1326,7 @@ impl AppServerSession {
                     input: items,
                     tool_output: None,
                     responsesapi_client_metadata: None,
-                    additional_context: None,
+                    additional_context,
                     environments: None,
                     cwd: Some(cwd),
                     runtime_workspace_roots: Some(workspace_roots.to_vec()),
@@ -1279,6 +1381,7 @@ impl AppServerSession {
         thread_id: ThreadId,
         turn_id: String,
         items: Vec<UserInput>,
+        additional_context: Option<HashMap<String, AdditionalContextEntry>>,
     ) -> std::result::Result<TurnSteerResponse, TypedRequestError> {
         let request_id = self.next_request_id();
         self.client
@@ -1289,7 +1392,7 @@ impl AppServerSession {
                     client_user_message_id: None,
                     input: items,
                     responsesapi_client_metadata: None,
-                    additional_context: None,
+                    additional_context,
                     expected_turn_id: turn_id,
                 },
             })
@@ -1554,11 +1657,45 @@ impl AppServerSession {
         Ok(())
     }
 
+    pub(crate) fn register_workflow_response(
+        &self,
+        id: String,
+        bridge: crate::ultracode_bridge::UltracodeBridge,
+    ) {
+        self.workflow_response_bridges
+            .lock()
+            .unwrap()
+            .insert(id, bridge);
+    }
+
     pub(crate) async fn reject_server_request(
         &self,
         request_id: RequestId,
         error: JSONRPCErrorError,
     ) -> std::io::Result<()> {
+        if let RequestId::String(id) = &request_id
+            && (id.starts_with("workflow-supervisor:") || id.starts_with("workflow-approval:"))
+        {
+            let supervisor = self
+                .workflow_response_bridges
+                .lock()
+                .unwrap()
+                .get(id)
+                .cloned()
+                .ok_or_else(|| {
+                    std::io::Error::other("parent workflow response connection is unavailable")
+                })?;
+            supervisor
+                .request(
+                    "reject",
+                    serde_json::json!({"id":id,"error":error}),
+                    std::time::Duration::from_secs(30),
+                )
+                .await
+                .map_err(std::io::Error::other)?;
+            self.workflow_response_bridges.lock().unwrap().remove(id);
+            return Ok(());
+        }
         self.client.reject_server_request(request_id, error).await
     }
 
@@ -1567,6 +1704,29 @@ impl AppServerSession {
         request_id: RequestId,
         result: serde_json::Value,
     ) -> std::io::Result<()> {
+        if let RequestId::String(id) = &request_id
+            && (id.starts_with("workflow-supervisor:") || id.starts_with("workflow-approval:"))
+        {
+            let supervisor = self
+                .workflow_response_bridges
+                .lock()
+                .unwrap()
+                .get(id)
+                .cloned()
+                .ok_or_else(|| {
+                    std::io::Error::other("parent workflow response connection is unavailable")
+                })?;
+            supervisor
+                .request(
+                    "resolve",
+                    serde_json::json!({"id":id,"result":result}),
+                    std::time::Duration::from_secs(30),
+                )
+                .await
+                .map_err(std::io::Error::other)?;
+            self.workflow_response_bridges.lock().unwrap().remove(id);
+            return Ok(());
+        }
         self.client.resolve_server_request(request_id, result).await
     }
 

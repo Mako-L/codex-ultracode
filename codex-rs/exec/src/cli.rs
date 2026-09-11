@@ -21,6 +21,10 @@ pub struct Cli {
     #[arg(long = "strict-config", global = true, default_value_t = false)]
     pub strict_config: bool,
 
+    /// Run native workflows through the persistent local daemon.
+    #[arg(long, global = true)]
+    pub native_workflow_host: bool,
+
     #[clap(flatten)]
     pub shared: ExecSharedCliOptions,
 

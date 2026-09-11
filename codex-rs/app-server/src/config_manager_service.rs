@@ -229,6 +229,76 @@ impl ConfigManager {
         };
 
         if !paths_match(&allowed_path, &provided_path) {
+            // An explicit named profile file is another supported user layer. Keep its
+            // loader selection local to this edit so the daemon default is unchanged.
+            let requested_profile = provided_path
+                .as_path()
+                .file_name()
+                .and_then(|name| name.to_str())
+                .and_then(|name| name.strip_suffix(".config.toml"))
+                .and_then(|name| name.parse::<codex_config::ProfileV2Name>().ok());
+            if provided_path
+                .as_path()
+                .parent()
+                .is_some_and(|parent| paths_match(parent, self.codex_home()))
+                && let Some(profile) = requested_profile
+            {
+                let resolved =
+                    resolve_symlink_write_paths(provided_path.as_path()).map_err(|error| {
+                        ConfigManagerError::io("failed to resolve profile write target", error)
+                    })?;
+                if resolved.read_path.is_none() {
+                    return Err(ConfigManagerError::write(
+                        ConfigWriteErrorCode::ConfigLayerReadonly,
+                        "Unable to resolve named profile write target",
+                    ));
+                }
+                let target = match std::fs::canonicalize(&resolved.write_path) {
+                    Ok(target) => target,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        let parent = resolved.write_path.parent().ok_or_else(|| {
+                            ConfigManagerError::write(
+                                ConfigWriteErrorCode::ConfigLayerReadonly,
+                                "Named profile target has no parent",
+                            )
+                        })?;
+                        std::fs::canonicalize(parent)
+                            .map_err(|error| {
+                                ConfigManagerError::io(
+                                    "failed to resolve profile target directory",
+                                    error,
+                                )
+                            })?
+                            .join(resolved.write_path.file_name().ok_or_else(|| {
+                                ConfigManagerError::write(
+                                    ConfigWriteErrorCode::ConfigLayerReadonly,
+                                    "Named profile target has no filename",
+                                )
+                            })?)
+                    }
+                    Err(error) => {
+                        return Err(ConfigManagerError::io(
+                            "failed to resolve profile write target",
+                            error,
+                        ));
+                    }
+                };
+                let home = std::fs::canonicalize(self.codex_home()).map_err(|error| {
+                    ConfigManagerError::io("failed to resolve Codex home", error)
+                })?;
+                if !target.starts_with(home) {
+                    return Err(ConfigManagerError::write(
+                        ConfigWriteErrorCode::ConfigLayerReadonly,
+                        "Named profile write target must remain inside Codex home",
+                    ));
+                }
+                return Box::pin(self.for_user_profile(profile).apply_edits(
+                    Some(provided_path.to_string_lossy().into_owned()),
+                    expected_version,
+                    edits,
+                ))
+                .await;
+            }
             return Err(ConfigManagerError::write(
                 ConfigWriteErrorCode::ConfigLayerReadonly,
                 "Only writes to the user config are allowed",

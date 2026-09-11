@@ -60,12 +60,15 @@ impl Default for ReadFileOptions {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WriteFileOptions {
     pub follow_symlinks: bool,
+    /// Fail if the target already exists.
+    pub create_new: bool,
 }
 
 impl Default for WriteFileOptions {
     fn default() -> Self {
         Self {
             follow_symlinks: true,
+            create_new: false,
         }
     }
 }

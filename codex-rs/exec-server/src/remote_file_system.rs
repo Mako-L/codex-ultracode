@@ -117,12 +117,19 @@ impl RemoteFileSystem {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
         trace!("remote fs write_file");
+        if options.create_new {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "exclusive file creation is not negotiated with remote executors",
+            ));
+        }
         let client = self.client.get().await.map_err(map_remote_error)?;
         let result = client
             .fs_write_file(FsWriteFileParams {
                 path: path.clone(),
                 data_base64: STANDARD.encode(contents),
                 follow_symlinks: (!options.follow_symlinks).then_some(false),
+                create_new: options.create_new.then_some(true),
                 sandbox: remote_sandbox_context(sandbox),
             })
             .await;

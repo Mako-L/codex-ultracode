@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "resolvedPath": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string"
+    },
+    "sourceDigest": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "resolvedPath",
+    "source",
+    "sourceDigest"
+  ],
+  "title": "WorkflowScriptReadResponse",
+  "type": "object"
+}

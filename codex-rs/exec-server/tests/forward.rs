@@ -118,6 +118,7 @@ async fn forwarder_runs_commands_and_transfers_files() -> Result<()> {
             path: PathUri::from_host_native_path(&path)?,
             follow_symlinks: None,
             data_base64: STANDARD.encode(&contents),
+            create_new: None,
             sandbox: None,
         }),
     )

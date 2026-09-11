@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "runId": {
+      "type": "string"
+    },
+    "workerId": {
+      "type": "string"
+    },
+    "workspaceId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "runId",
+    "workerId"
+  ],
+  "title": "WorkflowWorkspaceReleaseParams",
+  "type": "object"
+}

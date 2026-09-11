@@ -94,6 +94,8 @@ impl ChatWidget {
             app_event_tx.clone(),
             pet_http_client.clone(),
         );
+        let workflow_keyword_enabled =
+            config.ultracode_keyword_trigger && !config.disable_workflows;
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
@@ -121,6 +123,7 @@ impl ChatWidget {
             model_catalog,
             model_popup_request_id: None,
             model_popup_model_ids: Vec::new(),
+            workflow_commands: Vec::new(),
             session_telemetry,
             session_header: SessionHeader::new(header_model),
             initial_user_message,
@@ -260,7 +263,9 @@ impl ChatWidget {
             last_rendered_user_message_display: None,
             last_non_retry_error: None,
         };
-
+        widget
+            .bottom_pane
+            .set_workflow_keyword_enabled(workflow_keyword_enabled);
         widget.prefetch_rate_limits();
         if let Some(keymap) = runtime_keymap {
             widget.bottom_pane.set_keymap_bindings(&keymap);

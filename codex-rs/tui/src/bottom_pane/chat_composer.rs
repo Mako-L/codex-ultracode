@@ -279,6 +279,7 @@ use super::skill_popup::SkillPopup;
 use super::slash_commands::BuiltinCommandFlags;
 use super::slash_commands::ServiceTierCommand;
 use super::slash_commands::SlashCommandItem;
+use super::slash_commands::WorkflowCommand;
 use crate::bottom_pane::paste_burst::FlushResult;
 use crate::history_cell::sanitize_user_text;
 use crate::key_hint::KeyBindingListExt;
@@ -344,6 +345,7 @@ use codex_file_search::FileMatch;
 use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
 use std::cell::OnceCell;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -371,10 +373,12 @@ pub enum InputResult {
     Submitted {
         text: String,
         text_elements: Vec<TextElement>,
+        workflow_keyword: Option<bool>,
     },
     Queued {
         text: String,
         text_elements: Vec<TextElement>,
+        workflow_keyword: Option<bool>,
         action: QueuedInputAction,
         pending_pastes: Vec<(String, String)>,
     },
@@ -385,12 +389,14 @@ pub enum InputResult {
     Command(SlashCommand),
     /// A bare model service-tier command parsed by the composer.
     ServiceTierCommand(ServiceTierCommand),
+    WorkflowCommand(WorkflowCommand),
     /// An inline slash command and its trimmed argument text.
     ///
     /// The `TextElement` ranges are rebased into the argument string, while any pending local
     /// command-history entry still represents the original command invocation that should be
     /// committed only if dispatch accepts it.
     CommandWithArgs(SlashCommand, String, Vec<TextElement>),
+    WorkflowCommandWithArgs(WorkflowCommand, String),
     /// Agent-directed input was attempted while viewing a parent-owned spawned child thread.
     ParentOwnedInputBlocked,
     None,
@@ -503,6 +509,8 @@ impl ChatComposerConfig {
 
 pub(crate) struct ChatComposer {
     draft: DraftState,
+    workflow_keyword: RefCell<crate::ultracode_keyword::KeywordDraft>,
+    workflow_keyword_enabled: bool,
     popups: PopupState,
     app_event_tx: AppEventSender,
     history: ChatComposerHistory,
@@ -536,6 +544,7 @@ pub(crate) struct ChatComposer {
     token_activity_command_enabled: bool,
     service_tier_commands_enabled: bool,
     service_tier_commands: Vec<ServiceTierCommand>,
+    workflow_commands: Vec<WorkflowCommand>,
     mentions_v2_enabled: bool,
     goal_command_enabled: bool,
     personality_command_enabled: bool,
@@ -573,6 +582,7 @@ struct ComposerDraft {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ComposerDraftSnapshot {
     pub(crate) text: String,
+    pub(crate) workflow_keyword: Option<bool>,
     pub(crate) cursor: usize,
     pub(crate) text_elements: Vec<TextElement>,
     pub(crate) local_images: Vec<LocalImageAttachment>,
@@ -592,6 +602,7 @@ impl ChatComposer {
             self.draft.is_bash_mode,
             self.builtin_command_flags(),
             &self.service_tier_commands,
+            &self.workflow_commands,
         )
     }
 
@@ -645,6 +656,8 @@ impl ChatComposer {
 
         let mut this = Self {
             draft: DraftState::new(),
+            workflow_keyword: RefCell::default(),
+            workflow_keyword_enabled: true,
             popups: PopupState::default(),
             app_event_tx,
             history: ChatComposerHistory::new(),
@@ -711,6 +724,7 @@ impl ChatComposer {
             token_activity_command_enabled: false,
             service_tier_commands_enabled: false,
             service_tier_commands: Vec::new(),
+            workflow_commands: Vec::new(),
             mentions_v2_enabled: false,
             goal_command_enabled: false,
             personality_command_enabled: false,
@@ -912,6 +926,11 @@ impl ChatComposer {
 
     pub fn set_service_tier_commands(&mut self, commands: Vec<ServiceTierCommand>) {
         self.service_tier_commands = commands;
+        self.sync_popups();
+    }
+
+    pub fn set_workflow_commands(&mut self, commands: Vec<WorkflowCommand>) {
+        self.workflow_commands = commands;
         self.sync_popups();
     }
 
@@ -1804,6 +1823,7 @@ impl ChatComposer {
     pub(crate) fn draft_snapshot(&self) -> ComposerDraftSnapshot {
         ComposerDraftSnapshot {
             text: self.current_text(),
+            workflow_keyword: self.workflow_keyword_opt_in(),
             cursor: self.current_cursor(),
             text_elements: self.text_elements(),
             local_images: self.local_images(),
@@ -1812,6 +1832,31 @@ impl ChatComposer {
             pending_pastes: self.pending_pastes(),
             startup_local_history: self.history.startup_local_history().to_vec(),
             last_composer_activity_at: None,
+        }
+    }
+
+    fn workflow_keyword_opt_in(&self) -> Option<bool> {
+        if !self.workflow_keyword_enabled || self.draft.is_bash_mode {
+            return None;
+        }
+        let mut keyword = self.workflow_keyword.borrow_mut();
+        keyword.update(self.draft.textarea.text());
+        keyword.submission_opt_in()
+    }
+
+    pub(crate) fn restore_workflow_keyword(&mut self, opt_in: Option<bool>) {
+        let mut keyword = self.workflow_keyword.borrow_mut();
+        keyword.clear();
+        keyword.update(self.draft.textarea.text());
+        if opt_in == Some(false) {
+            keyword.dismiss_all();
+        }
+    }
+
+    pub(crate) fn set_workflow_keyword_enabled(&mut self, enabled: bool) {
+        self.workflow_keyword_enabled = enabled;
+        if !enabled {
+            self.workflow_keyword.borrow_mut().clear();
         }
     }
 
@@ -2010,6 +2055,26 @@ impl ChatComposer {
             return self.handle_history_search_key(key_event);
         }
 
+        if self.workflow_keyword_enabled
+            && !self.draft.is_bash_mode
+            && !self.popup_active()
+            && !self.draft.textarea.is_vim_normal_mode()
+            && !self.draft.textarea.is_vim_operator_pending()
+        {
+            let mut keyword = self.workflow_keyword.borrow_mut();
+            keyword.update(self.draft.textarea.text());
+            let dismissed = match (key_event.code, key_event.modifiers) {
+                (KeyCode::Char('w'), KeyModifiers::ALT) => keyword.toggle_dismissal().is_some(),
+                (KeyCode::Backspace, KeyModifiers::NONE) => {
+                    keyword.dismiss_at_cursor(self.draft.textarea.cursor())
+                }
+                _ => false,
+            };
+            if dismissed {
+                return (InputResult::None, true);
+            }
+        }
+
         if self.handle_vim_history_key(key_event) {
             return (InputResult::None, true);
         }
@@ -2028,6 +2093,9 @@ impl ChatComposer {
         self.reset_vim_mode_after_successful_dispatch(&result.0);
         // Update (or hide/show) popup after processing the key.
         self.sync_popups();
+        self.workflow_keyword
+            .borrow_mut()
+            .update(self.draft.textarea.text());
         result
     }
 
@@ -3167,6 +3235,8 @@ impl ChatComposer {
                 | InputResult::Command(_)
                 | InputResult::ServiceTierCommand(_)
                 | InputResult::CommandWithArgs(_, _, _)
+                | InputResult::WorkflowCommand(_)
+                | InputResult::WorkflowCommandWithArgs(_, _)
         ) {
             self.vim_history = VimHistory::default();
             self.draft.textarea.enter_vim_insert_mode();
@@ -3220,6 +3290,7 @@ impl ChatComposer {
                 self.handle_paste(pasted);
             }
             let visible_shell_command = self.is_bang_shell_command();
+            let workflow_keyword = self.workflow_keyword_opt_in();
             let original_input = self.current_text();
             let original_text_elements = self.current_text_elements();
             let original_pending_pastes = self.draft.pending_pastes.clone();
@@ -3261,10 +3332,12 @@ impl ChatComposer {
                 } else {
                     (text, text_elements, pending_pastes)
                 };
+                self.workflow_keyword.borrow_mut().clear();
                 return (
                     InputResult::Queued {
                         text,
                         text_elements,
+                        workflow_keyword,
                         action,
                         pending_pastes,
                     },
@@ -3294,9 +3367,11 @@ impl ChatComposer {
             return (result, true);
         }
 
+        let workflow_keyword = self.workflow_keyword_opt_in();
         if let Some((text, text_elements)) =
             self.prepare_submission_text(/*record_history*/ true)
         {
+            self.workflow_keyword.borrow_mut().clear();
             if self.slash_commands_enabled()
                 && text.starts_with('!')
                 && !original_input.trim_start().starts_with('!')
@@ -3308,6 +3383,7 @@ impl ChatComposer {
                     InputResult::Queued {
                         text,
                         text_elements,
+                        workflow_keyword,
                         action: QueuedInputAction::Literal,
                         pending_pastes: original_pending_pastes,
                     },
@@ -3320,6 +3396,7 @@ impl ChatComposer {
                     InputResult::Submitted {
                         text,
                         text_elements,
+                        workflow_keyword,
                     },
                     true,
                 )
@@ -3375,6 +3452,7 @@ impl ChatComposer {
         Some(match command {
             SlashCommandItem::Builtin(cmd) => InputResult::Command(cmd),
             SlashCommandItem::ServiceTier(command) => InputResult::ServiceTierCommand(command),
+            SlashCommandItem::Workflow(command) => InputResult::WorkflowCommand(command),
         })
     }
 
@@ -3399,14 +3477,15 @@ impl ChatComposer {
         );
         let trimmed_rest = inline_command.rest.trim();
         args_elements = Self::trim_text_elements(inline_command.rest, trimmed_rest, args_elements);
-        let SlashCommandItem::Builtin(cmd) = command else {
-            return None;
-        };
-        Some(InputResult::CommandWithArgs(
-            cmd,
-            trimmed_rest.to_string(),
-            args_elements,
-        ))
+        Some(match command {
+            SlashCommandItem::Builtin(cmd) => {
+                InputResult::CommandWithArgs(cmd, trimmed_rest.to_string(), args_elements)
+            }
+            SlashCommandItem::Workflow(command) => {
+                InputResult::WorkflowCommandWithArgs(command, trimmed_rest.to_string())
+            }
+            SlashCommandItem::ServiceTier(_) => return None,
+        })
     }
 
     /// Expand pending placeholders and extract normalized inline-command args.
@@ -4976,6 +5055,16 @@ impl ChatComposer {
                     .render_ref_masked(textarea_rect, buf, &mut state, mask_char);
             } else {
                 let mut highlights = self.plugin_at_mention_highlights();
+                if self.workflow_keyword_enabled && !self.draft.is_bash_mode {
+                    let mut keyword = self.workflow_keyword.borrow_mut();
+                    keyword.update(self.draft.textarea.text());
+                    highlights.extend(
+                        keyword
+                            .active_ranges()
+                            .into_iter()
+                            .map(|range| (range, Style::default().fg(Color::Magenta))),
+                    );
+                }
                 let search_highlight_style =
                     Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD);
                 highlights.extend(
@@ -5085,6 +5174,100 @@ mod tests {
             ),
             rx,
         )
+    }
+
+    #[test]
+    fn workflow_keyword_backspace_dismisses_without_deleting_text() {
+        let (mut composer, _events) = new_test_composer();
+        composer.draft.disable_paste_burst = true;
+        composer.set_text_content("ultracode".to_string(), Vec::new(), Vec::new());
+        composer.draft.textarea.set_cursor("ultracode".len());
+        composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(composer.current_text(), "ultracode");
+        composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(composer.current_text(), "ultracod");
+    }
+
+    #[test]
+    fn workflow_keyword_is_highlighted_and_alt_w_toggles_it() {
+        let (mut composer, _events) = new_test_composer();
+        composer.set_text_content("Use ULTRACODE".to_string(), Vec::new(), Vec::new());
+        let highlighted = |composer: &ChatComposer| {
+            let area = Rect::new(0, 0, 50, 5);
+            let mut buffer = Buffer::empty(area);
+            composer.render(area, &mut buffer);
+            buffer
+                .content
+                .iter()
+                .filter(|cell| cell.fg == Color::Magenta)
+                .count()
+        };
+        assert_eq!(highlighted(&composer), 9);
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::ALT));
+        assert_eq!(highlighted(&composer), 0);
+        assert_eq!(composer.current_text(), "Use ULTRACODE");
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::ALT));
+        assert_eq!(highlighted(&composer), 9);
+    }
+
+    #[test]
+    fn workflow_keyword_submission_preserves_choice_and_resets_next_draft() {
+        for queued in [false, true] {
+            for dismissed in [false, true] {
+                let (mut composer, _events) = new_test_composer();
+                composer.draft.disable_paste_burst = true;
+                composer.set_text_content("use ultracode".to_string(), Vec::new(), Vec::new());
+                if dismissed {
+                    composer.handle_key_event(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::ALT));
+                }
+                let (result, _) = composer.handle_submission_with_time(queued, Instant::now());
+                let (text, choice) = match result {
+                    InputResult::Submitted {
+                        text,
+                        workflow_keyword,
+                        ..
+                    } if !queued => (text, workflow_keyword),
+                    InputResult::Queued {
+                        text,
+                        workflow_keyword,
+                        ..
+                    } if queued => (text, workflow_keyword),
+                    other => panic!("unexpected submission: {other:?}"),
+                };
+                assert_eq!(text, "use ultracode");
+                assert_eq!(choice, Some(!dismissed));
+                composer.set_text_content("ultracode".to_string(), Vec::new(), Vec::new());
+                assert_eq!(composer.workflow_keyword_opt_in(), Some(true));
+            }
+        }
+    }
+
+    #[test]
+    fn workflow_keyword_disabled_and_shell_modes_leave_editing_unchanged() {
+        let (mut composer, _events) = new_test_composer();
+        composer.draft.disable_paste_burst = true;
+        composer.set_text_content("ultracode".to_string(), Vec::new(), Vec::new());
+        composer.set_workflow_keyword_enabled(false);
+        assert_eq!(composer.workflow_keyword_opt_in(), None);
+        composer.draft.textarea.set_cursor(9);
+        composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(composer.current_text(), "ultracod");
+        composer.set_workflow_keyword_enabled(true);
+        composer.set_text_content("ultracode".to_string(), Vec::new(), Vec::new());
+        composer.draft.is_bash_mode = true;
+        assert_eq!(composer.workflow_keyword_opt_in(), None);
+    }
+
+    #[test]
+    fn workflow_keyword_dismissal_survives_draft_restore() {
+        let (mut composer, _events) = new_test_composer();
+        composer.set_text_content("ultracode".to_string(), Vec::new(), Vec::new());
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::ALT));
+        let snapshot = composer.draft_snapshot();
+        let (mut restored, _events) = new_test_composer();
+        restored.set_text_content(snapshot.text, snapshot.text_elements, Vec::new());
+        restored.restore_workflow_keyword(snapshot.workflow_keyword);
+        assert_eq!(restored.workflow_keyword_opt_in(), Some(false));
     }
 
     #[test]
@@ -6402,6 +6585,7 @@ mod tests {
             InputResult::Submitted {
                 text,
                 text_elements,
+                ..
             } => {
                 assert_eq!(text, "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 5));
                 assert!(text_elements.is_empty());
@@ -8945,6 +9129,7 @@ mod tests {
             result,
             InputResult::Queued {
                 text: "hi".to_string(),
+                workflow_keyword: None,
                 text_elements: Vec::new(),
                 action: QueuedInputAction::Plain,
                 pending_pastes: Vec::new(),
@@ -9475,6 +9660,9 @@ mod tests {
                 Some(CommandItem::ServiceTier(command)) => {
                     panic!("expected model command, got service tier {command:?}")
                 }
+                Some(CommandItem::Workflow(command)) => {
+                    panic!("expected built-in command, got workflow {command:?}")
+                }
                 None => panic!("no selected command for '/mo'"),
             },
             _ => panic!("slash popup not active after typing '/mo'"),
@@ -9557,6 +9745,9 @@ mod tests {
                 Some(CommandItem::ServiceTier(command)) => {
                     panic!("expected resume command, got service tier {command:?}")
                 }
+                Some(CommandItem::Workflow(command)) => {
+                    panic!("expected built-in command, got workflow {command:?}")
+                }
                 None => panic!("no selected command for '/res'"),
             },
             _ => panic!("slash popup not active after typing '/res'"),
@@ -9610,6 +9801,9 @@ mod tests {
                 }
                 Some(CommandItem::ServiceTier(command)) => {
                     panic!("expected pets command, got service tier {command:?}")
+                }
+                Some(CommandItem::Workflow(command)) => {
+                    panic!("expected built-in command, got workflow {command:?}")
                 }
                 None => panic!("no selected command for '/pet'"),
             },
@@ -9665,6 +9859,9 @@ mod tests {
                 Some(CommandItem::ServiceTier(command)) => {
                     panic!("expected btw command, got service tier {command:?}")
                 }
+                Some(CommandItem::Workflow(command)) => {
+                    panic!("expected built-in command, got workflow {command:?}")
+                }
                 None => panic!("no selected command for '/bt'"),
             },
             _ => panic!("slash popup not active after typing '/bt'"),
@@ -9718,6 +9915,9 @@ mod tests {
                 }
                 Some(CommandItem::ServiceTier(command)) => {
                     panic!("expected side command, got service tier {command:?}")
+                }
+                Some(CommandItem::Workflow(command)) => {
+                    panic!("expected built-in command, got workflow {command:?}")
                 }
                 None => panic!("no selected command for '/si'"),
             },
@@ -9816,6 +10016,9 @@ mod tests {
             }
             InputResult::ServiceTierCommand(command) => {
                 panic!("expected init command, got service tier {command:?}")
+            }
+            InputResult::WorkflowCommand(_) | InputResult::WorkflowCommandWithArgs(_, _) => {
+                panic!("expected built-in command")
             }
             InputResult::Submitted { text, .. } => {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
@@ -9978,6 +10181,7 @@ mod tests {
             result,
             InputResult::Queued {
                 text: "queued before session".to_string(),
+                workflow_keyword: None,
                 text_elements: Vec::new(),
                 action: QueuedInputAction::Plain,
                 pending_pastes: Vec::new(),
@@ -10327,6 +10531,9 @@ mod tests {
             InputResult::ServiceTierCommand(command) => {
                 panic!("expected diff command, got service tier {command:?}")
             }
+            InputResult::WorkflowCommand(_) | InputResult::WorkflowCommandWithArgs(_, _) => {
+                panic!("expected built-in command")
+            }
             InputResult::Submitted { text, .. } => {
                 panic!("expected command dispatch after Tab completion, got literal submit: {text}")
             }
@@ -10527,6 +10734,9 @@ mod tests {
             InputResult::ServiceTierCommand(command) => {
                 panic!("expected mention command, got service tier {command:?}")
             }
+            InputResult::WorkflowCommand(_) | InputResult::WorkflowCommandWithArgs(_, _) => {
+                panic!("expected built-in command")
+            }
             InputResult::Submitted { text, .. } => {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
             }
@@ -10632,6 +10842,7 @@ mod tests {
             InputResult::Submitted {
                 text,
                 text_elements,
+                ..
             } => {
                 assert_eq!(text, format!("{large} src/main.rs"));
                 assert!(text_elements.is_empty());
@@ -11204,6 +11415,7 @@ mod tests {
             InputResult::Submitted {
                 text,
                 text_elements,
+                ..
             } => {
                 assert_eq!(text, "[Image #1] hi");
                 assert_eq!(text_elements.len(), 1);
@@ -11559,6 +11771,7 @@ mod tests {
             InputResult::Submitted {
                 text,
                 text_elements,
+                ..
             } => {
                 let expected = format!("{large_content} [Image #1]");
                 assert_eq!(text, expected);
@@ -11602,6 +11815,7 @@ mod tests {
             InputResult::Submitted {
                 text,
                 text_elements,
+                ..
             } => {
                 let trimmed = large_content.trim().to_string();
                 assert_eq!(text, format!("{trimmed} [Image #1]"));
@@ -11645,6 +11859,7 @@ mod tests {
             InputResult::Submitted {
                 text,
                 text_elements,
+                ..
             } => {
                 assert_eq!(text, "line1\nline2\n [Image #1]");
                 assert!(!text.contains('\r'));
@@ -11708,6 +11923,7 @@ mod tests {
             InputResult::Submitted {
                 text,
                 text_elements,
+                ..
             } => {
                 assert_eq!(text, format!("/unknown {large_content}"));
                 assert!(text_elements.is_empty());
@@ -11736,6 +11952,7 @@ mod tests {
             InputResult::Submitted {
                 text,
                 text_elements,
+                ..
             } => {
                 assert_eq!(text, "[Image #1]");
                 assert_eq!(text_elements.len(), 1);

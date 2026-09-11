@@ -10,6 +10,149 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use pretty_assertions::assert_eq;
 use std::collections::VecDeque;
 
+#[tokio::test]
+async fn workflow_keyword_metadata_reaches_turn_without_changing_visible_input_or_effort() {
+    for choice in [None, Some(false), Some(true)] {
+        let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+        chat.config.workflow_size_guideline =
+            Some(codex_protocol::config_types::WorkflowSizeGuideline::Unrestricted);
+        chat.thread_id = Some(ThreadId::new());
+        let original_effort = chat.effective_collaboration_mode().reasoning_effort();
+        let mut message = UserMessage::from("Use ultracode to check this code");
+        message.workflow_keyword = choice;
+        chat.submit_user_message(message);
+        let Op::UserTurn {
+            items,
+            additional_context,
+            effort,
+            ..
+        } = op_rx.try_recv().unwrap()
+        else {
+            panic!("expected a user turn");
+        };
+        assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "Use ultracode to check this code".to_string(),
+                text_elements: Vec::new(),
+            }]
+        );
+        assert_eq!(effort, original_effort);
+        match choice {
+            None => assert!(additional_context.is_none()),
+            Some(enabled) => {
+                let context = additional_context.unwrap();
+                let entry = &context["ultracode_keyword"];
+                assert_eq!(
+                    entry.kind,
+                    codex_app_server_protocol::AdditionalContextKind::Application
+                );
+                assert_eq!(entry.value.contains("explicitly dismissed"), !enabled);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn workflow_size_guideline_is_advisory_on_the_next_prompt() {
+    use codex_protocol::config_types::WorkflowSizeGuideline;
+
+    for (guideline, expected) in [
+        (None, Some("fewer than 15")),
+        (Some(WorkflowSizeGuideline::Small), Some("fewer than 5")),
+        (Some(WorkflowSizeGuideline::Medium), Some("fewer than 15")),
+        (Some(WorkflowSizeGuideline::Large), Some("fewer than 50")),
+        (Some(WorkflowSizeGuideline::Unrestricted), None),
+    ] {
+        let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+        chat.thread_id = Some(ThreadId::new());
+        chat.config.workflow_size_guideline = guideline;
+        chat.submit_user_message(UserMessage::from("Do the task"));
+        let Op::UserTurn {
+            additional_context, ..
+        } = op_rx.try_recv().unwrap()
+        else {
+            panic!("expected a user turn");
+        };
+        let advisory = additional_context
+            .as_ref()
+            .and_then(|context| context.get("workflow_size_guideline"));
+        match expected {
+            Some(expected) => assert!(advisory.unwrap().value.contains(expected)),
+            None => assert!(advisory.is_none()),
+        }
+    }
+}
+
+#[tokio::test]
+async fn workflow_keyword_choice_survives_queue_edit_and_thread_restore() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.chat_keymap.edit_queued_message = vec![crate::key_hint::alt(KeyCode::Up)];
+    handle_turn_started(&mut chat, "turn-1");
+    chat.bottom_pane
+        .set_composer_text("ultracode".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::ALT));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Tab));
+    assert_eq!(
+        chat.input_queue
+            .queued_user_messages
+            .front()
+            .unwrap()
+            .workflow_keyword,
+        Some(false)
+    );
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+    assert_eq!(
+        chat.bottom_pane.composer_draft_snapshot().workflow_keyword,
+        Some(false)
+    );
+    let saved = chat.capture_thread_input_state();
+    chat.restore_thread_input_state(
+        saved,
+        ThreadInputStateRestoreMode {
+            preserve_in_flight_turn: true,
+        },
+    );
+    assert_eq!(
+        chat.bottom_pane.composer_draft_snapshot().workflow_keyword,
+        Some(false)
+    );
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    handle_turn_completed(&mut chat, "turn-1", None);
+    let Op::UserTurn {
+        additional_context: Some(context),
+        ..
+    } = op_rx.try_recv().unwrap()
+    else {
+        panic!("expected restored keyword metadata");
+    };
+    assert!(
+        context["ultracode_keyword"]
+            .value
+            .contains("explicitly dismissed")
+    );
+}
+
+#[test]
+fn workflow_keyword_queue_identity_and_merge_preserve_explicit_choices() {
+    let mut dismissed = UserMessage::from("ultracode");
+    dismissed.workflow_keyword = Some(false);
+    let mut active = dismissed.clone();
+    active.workflow_keyword = Some(true);
+    assert_ne!(dismissed, active);
+    let plain = UserMessage::from("ultracode");
+    assert_eq!(plain.workflow_keyword, None);
+    assert_eq!(
+        merge_user_messages(vec![dismissed.clone(), plain]).workflow_keyword,
+        Some(false)
+    );
+    assert_eq!(
+        merge_user_messages(vec![dismissed, active]).workflow_keyword,
+        Some(true)
+    );
+}
+
 fn paste_hidden_shell_payload(chat: &mut ChatWidget) -> String {
     let payload = format!("!echo {}", "x".repeat(1000));
     chat.handle_paste(payload.clone());
@@ -1349,6 +1492,7 @@ async fn queued_restore_with_remote_images_keeps_local_placeholder_mapping() {
     let remote_image_urls = vec!["https://example.com/queued-remote.png".to_string()];
 
     chat.restore_user_message_to_composer(UserMessage {
+        workflow_keyword: None,
         text: text.clone(),
         local_images: local_images.clone(),
         remote_image_urls: remote_image_urls.clone(),
@@ -1382,6 +1526,7 @@ async fn restored_message_preserves_existing_composer_draft_and_attachments() {
         .set_composer_pending_pastes(vec![(paste_placeholder.to_string(), "hello".to_string())]);
 
     chat.restore_user_message_to_composer(UserMessage {
+        workflow_keyword: None,
         text: "[Image #1] retry prompt".to_string(),
         local_images: vec![LocalImageAttachment {
             placeholder: "[Image #1]".to_string(),
@@ -1425,6 +1570,7 @@ async fn interrupted_turn_restore_keeps_active_mode_for_resubmission() {
     chat.on_task_started();
     chat.input_queue.queued_user_messages.push_back(
         UserMessage {
+            workflow_keyword: None,
             text: "Implement the plan.".to_string(),
             local_images: Vec::new(),
             remote_image_urls: Vec::new(),
@@ -1483,6 +1629,7 @@ async fn remap_placeholders_uses_attachment_labels() {
         },
     ];
     let message = UserMessage {
+        workflow_keyword: None,
         text,
         text_elements: elements,
         local_images: attachments,
@@ -1549,6 +1696,7 @@ async fn remap_placeholders_uses_byte_ranges_when_placeholder_missing() {
         },
     ];
     let message = UserMessage {
+        workflow_keyword: None,
         text,
         text_elements: elements,
         local_images: attachments,
@@ -2118,6 +2266,7 @@ async fn submit_user_message_ignores_inaccessible_app_mentions_from_bindings() {
     );
 
     chat.submit_user_message(UserMessage {
+        workflow_keyword: None,
         text: "$arabica-uae".to_string(),
         local_images: Vec::new(),
         remote_image_urls: Vec::new(),
@@ -2265,6 +2414,7 @@ async fn task_mention_submission_and_transcript_preserve_the_visible_title() {
         chat.set_task_mentions_enabled(enabled);
         let title = "Review database migration";
         chat.submit_user_message(UserMessage {
+            workflow_keyword: None,
             text: format!("Inspect @{title}"),
             local_images: Vec::new(),
             remote_image_urls: Vec::new(),
@@ -2449,4 +2599,35 @@ async fn reconnect_holds_only_recovered_input_until_manually_edited() {
         assert!(chat.maybe_send_next_queued_input());
         assert_matches!(next_submit_op(&mut ops), Op::UserTurn { .. });
     }
+}
+
+#[tokio::test]
+async fn session_workflow_mode_reaches_native_turn_and_preserves_keyword_dismissal() {
+    let (mut chat, _events, mut ops) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_ultracode_mode(true);
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
+    let mut message = UserMessage::from("Do this task");
+    message.workflow_keyword = Some(false);
+    chat.submit_user_message(message);
+    let Op::UserTurn {
+        effort,
+        additional_context,
+        ..
+    } = ops.try_recv().unwrap()
+    else {
+        panic!("expected user turn");
+    };
+    assert_eq!(effort, Some(ReasoningEffortConfig::XHigh));
+    let context = additional_context.unwrap();
+    assert!(
+        context["ultracode_session"]
+            .value
+            .contains("Use the workflow tool")
+    );
+    assert!(
+        context["ultracode_keyword"]
+            .value
+            .contains("explicitly dismissed")
+    );
 }

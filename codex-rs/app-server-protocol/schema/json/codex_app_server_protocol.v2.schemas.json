@@ -1749,6 +1749,174 @@
             },
             "method": {
               "enum": [
+                "workflow/authority/capture"
+              ],
+              "title": "Workflow/authority/captureRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/WorkflowAuthorityCaptureParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Workflow/authority/captureRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "workflow/script/read"
+              ],
+              "title": "Workflow/script/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/WorkflowScriptReadParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Workflow/script/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "workflow/save"
+              ],
+              "title": "Workflow/saveRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/WorkflowSaveParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Workflow/saveRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "workflow/completion/inject"
+              ],
+              "title": "Workflow/completion/injectRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/WorkflowCompletionInjectParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Workflow/completion/injectRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "workflow/workspace/prepare"
+              ],
+              "title": "Workflow/workspace/prepareRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/WorkflowWorkspacePrepareParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Workflow/workspace/prepareRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "workflow/workspace/release"
+              ],
+              "title": "Workflow/workspace/releaseRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/WorkflowWorkspaceReleaseParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Workflow/workspace/releaseRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "workflow/worker/start"
+              ],
+              "title": "Workflow/worker/startRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/WorkflowWorkerStartParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Workflow/worker/startRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/resume"
               ],
               "title": "Thread/resumeRequestMethod",
@@ -5069,6 +5237,13 @@
             "null"
           ]
         },
+        "disable_workflows": {
+          "description": "Disables all workflow entry points when true.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "forced_chatgpt_workspace_id": {
           "anyOf": [
             {
@@ -5203,10 +5378,34 @@
             }
           ]
         },
+        "ultracode": {
+          "description": "Enables workflow orchestration globally. This remains separate from the model reasoning effort and the keyword trigger.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "ultracode_keyword_trigger": {
+          "description": "Enables the `ultracode:` prompt keyword trigger.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "web_search": {
           "anyOf": [
             {
               "$ref": "#/definitions/WebSearchMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workflow_size_guideline": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WorkflowSizeGuideline"
             },
             {
               "type": "null"
@@ -23080,6 +23279,538 @@
         "samplePaths"
       ],
       "title": "WindowsWorldWritableWarningNotification",
+      "type": "object"
+    },
+    "WorkflowAuthorityCaptureParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "allowIsolatedWorkspaces": {
+          "default": false,
+          "type": "boolean"
+        },
+        "parentThreadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "parentThreadId"
+      ],
+      "title": "WorkflowAuthorityCaptureParams",
+      "type": "object"
+    },
+    "WorkflowAuthorityCaptureResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "authorityDigest": {
+          "type": "string"
+        },
+        "authorityRef": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "generation": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "models": {
+          "items": {
+            "$ref": "#/definitions/WorkflowModelOption"
+          },
+          "type": "array"
+        },
+        "parentEffort": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "parentModel": {
+          "type": "string"
+        },
+        "plugins": {
+          "items": {
+            "$ref": "#/definitions/WorkflowPluginOption"
+          },
+          "type": "array"
+        },
+        "webSearchAvailable": {
+          "type": "boolean"
+        },
+        "workflowHostUrl": {
+          "description": "Effective native workflow listener, used to bind a headless controller to its parent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "authorityDigest",
+        "authorityRef",
+        "cwd",
+        "generation",
+        "models",
+        "parentModel",
+        "plugins",
+        "webSearchAvailable"
+      ],
+      "title": "WorkflowAuthorityCaptureResponse",
+      "type": "object"
+    },
+    "WorkflowCompletionInjectParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "parentThreadId": {
+          "type": "string"
+        },
+        "runId": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "parentThreadId",
+        "runId",
+        "summary"
+      ],
+      "title": "WorkflowCompletionInjectParams",
+      "type": "object"
+    },
+    "WorkflowCompletionInjectResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "turnId": {
+          "description": "The turn that accepted the completion; acceptance can precede persistence.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "turnId"
+      ],
+      "title": "WorkflowCompletionInjectResponse",
+      "type": "object"
+    },
+    "WorkflowModelOption": {
+      "properties": {
+        "defaultEffort": {
+          "$ref": "#/definitions/ReasoningEffort"
+        },
+        "model": {
+          "type": "string"
+        },
+        "supportedEfforts": {
+          "items": {
+            "$ref": "#/definitions/ReasoningEffort"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "defaultEffort",
+        "model",
+        "supportedEfforts"
+      ],
+      "type": "object"
+    },
+    "WorkflowPluginOption": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "root": {
+          "type": "string"
+        },
+        "workflows": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "root",
+        "workflows"
+      ],
+      "type": "object"
+    },
+    "WorkflowSaveParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "authorityDigest": {
+          "type": "string"
+        },
+        "authorityRef": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "parentThreadId": {
+          "type": "string"
+        },
+        "runId": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "sourceDigest": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "authorityDigest",
+        "authorityRef",
+        "name",
+        "parentThreadId",
+        "runId",
+        "scope",
+        "source",
+        "sourceDigest"
+      ],
+      "title": "WorkflowSaveParams",
+      "type": "object"
+    },
+    "WorkflowSaveResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "title": "WorkflowSaveResponse",
+      "type": "object"
+    },
+    "WorkflowScriptReadParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "authorityDigest": {
+          "type": "string"
+        },
+        "authorityRef": {
+          "type": "string"
+        },
+        "parentThreadId": {
+          "type": "string"
+        },
+        "scriptPath": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "authorityDigest",
+        "authorityRef",
+        "parentThreadId",
+        "scriptPath"
+      ],
+      "title": "WorkflowScriptReadParams",
+      "type": "object"
+    },
+    "WorkflowScriptReadResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "resolvedPath": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "sourceDigest": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "resolvedPath",
+        "source",
+        "sourceDigest"
+      ],
+      "title": "WorkflowScriptReadResponse",
+      "type": "object"
+    },
+    "WorkflowSizeGuideline": {
+      "description": "Advisory target for the number of agents in a dynamically authored workflow.",
+      "enum": [
+        "unrestricted",
+        "small",
+        "medium",
+        "large"
+      ],
+      "type": "string"
+    },
+    "WorkflowWorkerStartParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "agentType": {
+          "description": "Native role name. The host resolves configured roles; this protocol does not freeze an enum.",
+          "type": "string"
+        },
+        "authorityDigest": {
+          "type": "string"
+        },
+        "authorityGeneration": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "authorityRef": {
+          "type": "string"
+        },
+        "effort": {
+          "$ref": "#/definitions/ReasoningEffort"
+        },
+        "effortExplicit": {
+          "default": false,
+          "type": "boolean"
+        },
+        "model": {
+          "type": "string"
+        },
+        "modelExplicit": {
+          "default": false,
+          "type": "boolean"
+        },
+        "parentThreadId": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "readOnly": {
+          "description": "Restrict this worker to the parent's read-only intersection.",
+          "type": "boolean"
+        },
+        "resumeThreadId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "roleDigest": {
+          "type": "string"
+        },
+        "runId": {
+          "type": "string"
+        },
+        "schema": true,
+        "workerId": {
+          "type": "string"
+        },
+        "workspace": {
+          "$ref": "#/definitions/WorkflowWorkspace"
+        }
+      },
+      "required": [
+        "agentType",
+        "authorityDigest",
+        "authorityGeneration",
+        "authorityRef",
+        "effort",
+        "model",
+        "parentThreadId",
+        "prompt",
+        "readOnly",
+        "roleDigest",
+        "runId",
+        "workerId",
+        "workspace"
+      ],
+      "title": "WorkflowWorkerStartParams",
+      "type": "object"
+    },
+    "WorkflowWorkerStartResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "effort": {
+          "$ref": "#/definitions/ReasoningEffort"
+        },
+        "model": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "effort",
+        "model",
+        "sessionId",
+        "threadId",
+        "turnId"
+      ],
+      "title": "WorkflowWorkerStartResponse",
+      "type": "object"
+    },
+    "WorkflowWorkspace": {
+      "properties": {
+        "baseCommit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "isolated": {
+          "type": "boolean"
+        },
+        "workspaceId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "cwd",
+        "isolated"
+      ],
+      "type": "object"
+    },
+    "WorkflowWorkspacePrepareParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "agentType": {
+          "type": "string"
+        },
+        "authorityDigest": {
+          "type": "string"
+        },
+        "authorityRef": {
+          "type": "string"
+        },
+        "isolation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "previous": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WorkflowWorkspace"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requestedCwd": {
+          "type": "string"
+        },
+        "runId": {
+          "type": "string"
+        },
+        "workerId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "agentType",
+        "authorityDigest",
+        "authorityRef",
+        "requestedCwd",
+        "runId",
+        "workerId"
+      ],
+      "title": "WorkflowWorkspacePrepareParams",
+      "type": "object"
+    },
+    "WorkflowWorkspacePrepareResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "authorityGeneration": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "baseCommit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "isolated": {
+          "type": "boolean"
+        },
+        "roleDigest": {
+          "type": "string"
+        },
+        "workspaceId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "authorityGeneration",
+        "cwd",
+        "isolated",
+        "roleDigest"
+      ],
+      "title": "WorkflowWorkspacePrepareResponse",
+      "type": "object"
+    },
+    "WorkflowWorkspaceReleaseParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "workerId": {
+          "type": "string"
+        },
+        "workspaceId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "runId",
+        "workerId"
+      ],
+      "title": "WorkflowWorkspaceReleaseParams",
+      "type": "object"
+    },
+    "WorkflowWorkspaceReleaseResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "eligible": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "eligible"
+      ],
+      "title": "WorkflowWorkspaceReleaseResponse",
       "type": "object"
     },
     "WorkspaceMessage": {

@@ -29,6 +29,7 @@ chrono = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["derive"] }
 codex-ansi-escape = { workspace = true }
 codex-app-server-client = { workspace = true }
+codex-app-server-daemon = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-install-context = { workspace = true }
@@ -89,6 +90,7 @@ ratatui = { workspace = true, features = [
 ] }
 ratatui-macros = { workspace = true }
 regex-lite = { workspace = true }
+regex = { workspace = true }
 rmcp = { workspace = true, features = ["server", "transport-streamable-http-server"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
@@ -103,6 +105,8 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
     "macros",
+    "io-util",
+    "net",
     "process",
     "rt-multi-thread",
     "signal",

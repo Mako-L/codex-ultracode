@@ -11,6 +11,7 @@ pub(super) async fn run_main_inner(
     loader_overrides: LoaderOverrides,
     explicit_remote_endpoint: Option<RemoteAppServerEndpoint>,
 ) -> std::io::Result<AppExitInfo> {
+    cli.apply_effort_overrides();
     let strict_config = cli.strict_config;
     let (sandbox_mode, approval_policy) = if cli.dangerously_bypass_approvals_and_sandbox {
         (
@@ -135,8 +136,16 @@ pub(super) async fn run_main_inner(
         .await;
     }
 
+    let workflow_daemon_launch = (cli.native_workflow_host
+        || cli.effort.as_deref() == Some("ultracode"))
+        && explicit_remote_endpoint.is_none()
+        && !workload_identity_selected
+        && loader_overrides_are_default(&launch_loader_overrides)
+        && !strict_config
+        && !cli.bypass_hook_trust;
     let reuse_implicit_local_daemon = !workload_identity_selected
         && (cli.agents_overview
+            || workflow_daemon_launch
             || can_reuse_implicit_local_daemon(
                 &cli_kv_overrides,
                 &launch_loader_overrides,
@@ -175,7 +184,17 @@ pub(super) async fn run_main_inner(
     };
     let mut startup_draft = startup_draft::StartupDraft::new(initial_screen, session_action)?;
 
-    let default_daemon = if explicit_remote_endpoint.is_none() && reuse_implicit_local_daemon {
+    let default_daemon = if workflow_daemon_launch {
+        let binary = std::env::current_exe()?;
+        let socket = startup_draft
+            .run_until(codex_app_server_daemon::ensure_workflow_backend(
+                &codex_home,
+                &binary,
+            ))
+            .await?
+            .map_err(std::io::Error::other)?;
+        Some(AbsolutePathBuf::from_absolute_path(socket)?)
+    } else if explicit_remote_endpoint.is_none() && reuse_implicit_local_daemon {
         startup_draft
             .run_until(maybe_probe_default_daemon_socket(&codex_home))
             .await?
