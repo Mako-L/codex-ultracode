@@ -2108,7 +2108,7 @@ impl TurnRequestProcessor {
                 || ownership.workspace_id != params.workspace.workspace_id
                 || ownership.cwd.to_string_lossy() != params.workspace.cwd
                 || ownership.role_digest != role_digest
-                || child_snapshot.parent_thread_id != Some(parent_thread_id)
+                || child_snapshot.forked_from_thread_id != Some(parent_thread_id)
                 || child_snapshot.model != effective_model
                 || child_snapshot.reasoning_effort.as_ref() != Some(&effective_effort)
             {
@@ -2127,10 +2127,44 @@ impl TurnRequestProcessor {
         } else {
             let reserved_thread_id = ThreadId::new();
             let mut workers = self.workflow_workers.lock().await;
-            if workers.values().any(|worker| {
+            if let Some((previous_id, previous)) = workers.iter().find(|(_, worker)| {
                 worker.run_id == params.run_id && worker.worker_id == params.worker_id
             }) {
-                return Err(invalid_request("workflow worker launch is already owned"));
+                let previous_id = *previous_id;
+                if previous.parent_thread_id != parent_thread_id
+                    || previous.authority_digest != params.authority_digest
+                    || previous.launch_intent
+                    || previous.workspace_id != params.workspace.workspace_id
+                    || previous.cwd != config.cwd
+                    || previous.role_digest != role_digest
+                    || previous.agent_type != params.agent_type
+                    || previous.read_only != force_read_only
+                    || previous.schema_digest != schema_digest
+                {
+                    return Err(invalid_request(
+                        "workflow worker replacement ownership is invalid",
+                    ));
+                }
+                let previous_thread = self
+                    .thread_manager
+                    .get_thread(previous_id)
+                    .await
+                    .map_err(|_| invalid_request("workflow worker state unavailable"))?;
+                let previous_config = previous_thread.config_snapshot().await;
+                if previous_config.forked_from_thread_id != Some(parent_thread_id)
+                    || previous_config.model != effective_model
+                    || previous_config.reasoning_effort.as_ref() != Some(&effective_effort)
+                {
+                    return Err(invalid_request(
+                        "workflow worker replacement lineage is invalid",
+                    ));
+                }
+                if !workflow_release_eligible(&previous_thread.agent_status().await) {
+                    return Err(invalid_request("workflow worker launch is already owned"));
+                }
+                // Replace a resolved terminal attempt atomically with its fresh reservation.
+                // Retain uncertain launches and active workers so retries cannot duplicate work.
+                workers.remove(&previous_id);
             }
             workers.insert(
                 reserved_thread_id,
