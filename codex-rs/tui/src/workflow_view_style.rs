@@ -34,9 +34,10 @@ pub(crate) fn styled_lines(
     lines: Vec<String>,
     worker_label_width: Option<usize>,
 ) -> Vec<Line<'static>> {
-    let divider = lines.iter().position(|line| {
-        line.trim_start().starts_with("──────────") || line.starts_with("▔▔▔▔▔▔▔▔▔▔")
-    });
+    let divider = lines
+        .iter()
+        .position(|line| line.trim_start().starts_with("──────────"))
+        .or_else(|| lines.iter().position(|line| line.starts_with("▔▔▔▔▔▔▔▔▔▔")));
     let dialog = divider.is_some_and(|index| lines[index].contains('▔'));
     let plain = Style::default();
     let gray = plain.fg(Color::Gray);
@@ -45,11 +46,13 @@ pub(crate) fn styled_lines(
         .enumerate()
         .map(|(index, line)| {
             let trimmed = line.trim_start();
-            let style = if Some(index) == divider {
+            let style = if line.starts_with("▔▔▔▔▔▔▔▔▔▔") {
+                Some(plain.fg(Color::LightBlue))
+            } else if Some(index) == divider {
                 Some(if dialog {
                     plain.fg(Color::LightBlue)
                 } else {
-                    gray
+                    plain.fg(Color::White)
                 })
             } else if divider.is_some_and(|start| index == start + 1) {
                 Some(

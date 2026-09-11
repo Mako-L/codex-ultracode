@@ -684,7 +684,8 @@ async fn local_daemon_registers_approval_gated_mcp_tools_for_both_start_paths() 
         .find(|server| server.name == "codex_tui")
         .expect("local daemon must connect to the TUI MCP server")
         .tools;
-    assert_eq!(tools.len(), 9);
+    assert_eq!(tools.len(), 10);
+    assert!(tools.contains_key("workflow"));
     for tool in crate::dynamic_tools::DELEGATION_TOOLS {
         assert!(tools.contains_key(tool));
     }

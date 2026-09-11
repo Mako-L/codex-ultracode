@@ -365,17 +365,8 @@ impl WorkflowView {
             *line = cell_cut(line, width);
         }
         out.truncate(height);
-        if matches!(
-            self.state.screen,
-            WorkflowScreen::Picker | WorkflowScreen::Save | WorkflowScreen::Effort
-        ) {
-            while out.len() < height {
-                out.insert(0, String::new())
-            }
-        } else {
-            while out.len() < height {
-                out.push(String::new())
-            }
+        while out.len() < height {
+            out.insert(0, String::new())
         }
         out
     }
@@ -560,7 +551,7 @@ fn render_effort(view: &WorkflowView, width: usize) -> Vec<String> {
         .unwrap_or(0);
     let start = width.saturating_sub(68) / 2;
     let start = start.max(3);
-    let ruler = "───────────────────────────────────────────┆────────────────────";
+    let ruler = "───────────────────────────────────────────┆──────────────────";
     let caret = [4, 10, 20, 30, 40, 53][index];
     let mut scale = String::new();
     for (i, c) in ruler.chars().enumerate() {
@@ -571,13 +562,13 @@ fn render_effort(view: &WorkflowView, width: usize) -> Vec<String> {
         "Effort",
         vec![
             String::new(),
-            format!("{}Faster{}Smarter", " ".repeat(start), " ".repeat(43)),
+            format!("{}Faster{}Smarter", " ".repeat(start), " ".repeat(49)),
             format!("{}{}", " ".repeat(start), scale),
             format!(
                 "{}low     medium     high     xhigh      max       ultracode",
                 " ".repeat(start)
             ),
-            format!("{}xhigh + workflows", " ".repeat(start + 53)),
+            format!("{}xhigh + workflows", " ".repeat(start + 45)),
         ],
         "←/→ to adjust · Enter to confirm · s for this session only · Esc to cancel",
     )
@@ -804,6 +795,7 @@ fn render_overview(view: &WorkflowView, width: usize, height: usize) -> Vec<Stri
         )
     };
     let mut out = vec![
+        "▔".repeat(width),
         String::new(),
         format!("  {}", "─".repeat(width.saturating_sub(6))),
         format!("   {}", clean(run["name"].as_str().unwrap_or_default())),
@@ -1011,7 +1003,7 @@ fn render_overview(view: &WorkflowView, width: usize, height: usize) -> Vec<Stri
     };
     let lifecycle = match run["status"].as_str() {
         Some("running") => " · p pause · x stop",
-        Some("paused") => " · p resume · x stop",
+        Some("paused") => " · p resume",
         _ => "",
     };
     out.push(format!(
@@ -1216,7 +1208,39 @@ mod tests {
     }
 
     #[test]
-    fn fourteen_reference_views_match_reviewed_js_goldens() {
+    fn overview_matches_captured_terminal_rows() {
+        // Original Claude captures 03, 04, 07, 09, 10, 12, and 14 use these
+        // dialog coordinates in a 160-column, 48-row terminal.
+        let view = WorkflowView::new(json!({"runs":[run()]}), None);
+        let lines = view.lines(160, 48);
+        assert_eq!(lines[2], "▔".repeat(160));
+        assert!(lines[5].contains("ui-reference"));
+        assert!(lines[8].contains("╭ Phases"));
+        assert!(lines[46].contains('╰'));
+        assert!(lines[47].contains("esc back"));
+        let area = Rect::new(0, 0, 160, 48);
+        let mut buffer = Buffer::empty(area);
+        (&view).render(area, &mut buffer);
+        assert_eq!(buffer[(0, 2)].fg, ratatui::style::Color::LightBlue);
+        assert_eq!(buffer[(2, 4)].fg, ratatui::style::Color::White);
+    }
+
+    #[test]
+    fn effort_matches_captured_terminal_columns() {
+        let mut view = WorkflowView::new(json!({"runs":[]}), None);
+        view.state.screen = WorkflowScreen::Effort;
+        for (effort, caret) in [("medium", 59), ("ultracode", 102)] {
+            view.state.effort = effort.into();
+            let lines = view.lines(160, 48);
+            assert_eq!(lines[42].find("Smarter"), Some(104));
+            assert_eq!(lines[43].chars().count(), 111);
+            assert_eq!(lines[43].chars().position(|c| c == '▲'), Some(caret));
+            assert_eq!(lines[45].find("xhigh + workflows"), Some(94));
+        }
+    }
+
+    #[test]
+    fn fourteen_reference_views_match_reviewed_goldens() {
         let fixture: Value =
             serde_json::from_str(include_str!("workflow_view_fixtures.json")).unwrap();
         for case in fixture["cases"].as_array().unwrap() {
