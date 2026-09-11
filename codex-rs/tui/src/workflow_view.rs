@@ -646,12 +646,7 @@ fn detail_rows(w: &Value, size: usize, expanded: bool) -> Vec<String> {
         w["prompt"].as_str().unwrap_or_default(),
         size.saturating_sub(2).max(1),
     );
-    out.extend(
-        prompt
-            .into_iter()
-            .take(if expanded { usize::MAX } else { 2 })
-            .map(|v| format!("  {v}")),
-    );
+    out.extend(prompt.into_iter().map(|v| format!("  {v}")));
     out.extend([String::new(), "Activity".into()]);
     let activity = w["activity"].as_array().map(Vec::as_slice).unwrap_or(&[]);
     let mut activity_out = Vec::new();
@@ -733,7 +728,6 @@ fn detail_rows(w: &Value, size: usize, expanded: bool) -> Vec<String> {
     out.extend(
         wrap(&outcome, size.saturating_sub(2).max(1))
             .into_iter()
-            .take(if expanded { usize::MAX } else { 2 })
             .map(|v| format!("  {v}")),
     );
     out
@@ -955,10 +949,9 @@ fn render_overview(view: &WorkflowView, width: usize, height: usize) -> Vec<Stri
                 .unwrap_or_default()
         };
         let ri = row + right_offset;
-        let prefix = if view.state.screen != WorkflowScreen::Detail
-            && view.state.focus == WorkflowFocus::Workers
-            && ri == view.state.worker
-        {
+        let prefix = if view.state.screen == WorkflowScreen::Detail {
+            " "
+        } else if view.state.focus == WorkflowFocus::Workers && ri == view.state.worker {
             " ❯"
         } else {
             "  "
@@ -1099,6 +1092,7 @@ fn elapsed(v: &Value) -> String {
 mod tests {
     use super::*;
     use ratatui::buffer::Buffer;
+    use ratatui::style::Modifier;
     use serde_json::json;
     fn run() -> Value {
         json!({"id":"run-1","name":"ui-reference","description":"UI inspection","status":"completed","startedAt":"2026-09-09T20:00:00Z","endedAt":"2026-09-09T20:00:32Z","phases":[{"name":"Inspect"},{"name":"Verify"}],"workers":[{"id":"a","label":"merge","phase":"Inspect","status":"completed","prompt":"prompt","model":"gpt-5","usage":{"totalTokens":40200},"output":"done","startedAt":"2026-09-09T20:00:00Z","endedAt":"2026-09-09T20:00:07Z"},{"id":"b","label":"quick","phase":"Inspect","status":"running","prompt":"bad\u{001b}[31mprompt","model":"gpt-5","activity":[],"output":"out"},{"id":"c","label":"compare","phase":"Verify","status":"completed","model":"gpt-5"}]})
@@ -1284,6 +1278,17 @@ mod tests {
                     w.as_object_mut().unwrap().remove("usage");
                 }
             }
+            if let Some(prompt) = case["workerPrompt"].as_str() {
+                run["workers"][0]["prompt"] = json!(prompt);
+            }
+            if let Some(outcome) = case["workerOutcome"].as_str() {
+                let field = if case["failed"] == true {
+                    "error"
+                } else {
+                    "output"
+                };
+                run["workers"][0][field] = json!(outcome);
+            }
             let count = case["runCount"].as_u64().unwrap_or(2) as usize;
             let runs = if case["kind"] == "empty" {
                 vec![]
@@ -1345,6 +1350,36 @@ mod tests {
                 v.state.effort = effort.into()
             }
             let output = text(&v, 160, 48);
+            if let Some(directory) = std::env::var_os("ULTRACODE_NATIVE_CELL_OUTPUT") {
+                let area = Rect::new(0, 0, 160, 48);
+                let mut buffer = Buffer::empty(area);
+                v.render(area, &mut buffer);
+                let cells: Vec<_> = (0..48)
+                    .flat_map(|row| {
+                        let buffer = &buffer;
+                        (0..160).map(move |column| {
+                            let cell = &buffer[(column, row)];
+                            json!({
+                                "row": row, "column": column, "grapheme": cell.symbol(),
+                                "foreground": format!("{:?}", cell.fg),
+                                "background": format!("{:?}", cell.bg),
+                                "bold": cell.modifier.contains(Modifier::BOLD),
+                                "italic": cell.modifier.contains(Modifier::ITALIC),
+                                "underline": cell.modifier.contains(Modifier::UNDERLINED),
+                                "inverse": cell.modifier.contains(Modifier::REVERSED),
+                            })
+                        })
+                    })
+                    .collect();
+                let directory = std::path::PathBuf::from(directory);
+                std::fs::create_dir_all(&directory).unwrap();
+                std::fs::write(
+                    directory.join(format!("{}.json", case["capture"].as_str().unwrap())),
+                    serde_json::to_vec(&json!({"columns":160,"rows":48,"case":case,"cells":cells}))
+                        .unwrap(),
+                )
+                .unwrap();
+            }
             assert_eq!(
                 normalized(&output),
                 normalized(golden(case["capture"].as_str().unwrap())),
