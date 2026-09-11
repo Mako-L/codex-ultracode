@@ -959,6 +959,56 @@ impl MessageProcessor {
         Ok(())
     }
 
+    // Keep workflow future construction out of the ordinary request poll frame.
+    // Debug builds otherwise reserve their stack slots even for thread/resume.
+    fn dispatch_workflow_request<'a>(
+        &'a self,
+        request_id: &'a ConnectionRequestId,
+        request: ClientRequest,
+    ) -> futures::future::BoxFuture<'a, Result<Option<ClientResponsePayload>, JSONRPCErrorError>>
+    {
+        Box::pin(async move {
+            match request {
+                ClientRequest::WorkflowAuthorityCapture { params, .. } => self
+                    .turn_processor
+                    .workflow_authority_capture(params)
+                    .await
+                    .map(|response| Some(response.into())),
+                ClientRequest::WorkflowScriptRead { params, .. } => self
+                    .turn_processor
+                    .workflow_script_read(params)
+                    .await
+                    .map(|response| Some(response.into())),
+                ClientRequest::WorkflowSave { params, .. } => self
+                    .turn_processor
+                    .workflow_save(params)
+                    .await
+                    .map(|response| Some(response.into())),
+                ClientRequest::WorkflowCompletionInject { params, .. } => self
+                    .turn_processor
+                    .workflow_completion_inject(params)
+                    .await
+                    .map(|response| Some(response.into())),
+                ClientRequest::WorkflowWorkspacePrepare { params, .. } => self
+                    .turn_processor
+                    .workflow_workspace_prepare(params)
+                    .await
+                    .map(|response| Some(response.into())),
+                ClientRequest::WorkflowWorkspaceRelease { params, .. } => self
+                    .turn_processor
+                    .workflow_workspace_release(params)
+                    .await
+                    .map(|response| Some(response.into())),
+                ClientRequest::WorkflowWorkerStart { params, .. } => self
+                    .turn_processor
+                    .workflow_worker_start(request_id, params)
+                    .await
+                    .map(|response| Some(response.into())),
+                _ => Err(invalid_request("not a workflow request")),
+            }
+        })
+    }
+
     async fn handle_initialized_client_request(
         self: Arc<Self>,
         connection_request_id: ConnectionRequestId,
@@ -1137,41 +1187,15 @@ impl MessageProcessor {
                     )
                     .await
             }
-            ClientRequest::WorkflowAuthorityCapture { params, .. } => self
-                .turn_processor
-                .workflow_authority_capture(params)
-                .await
-                .map(|response| Some(response.into())),
-            ClientRequest::WorkflowScriptRead { params, .. } => self
-                .turn_processor
-                .workflow_script_read(params)
-                .await
-                .map(|response| Some(response.into())),
-            ClientRequest::WorkflowSave { params, .. } => self
-                .turn_processor
-                .workflow_save(params)
-                .await
-                .map(|response| Some(response.into())),
-            ClientRequest::WorkflowCompletionInject { params, .. } => self
-                .turn_processor
-                .workflow_completion_inject(params)
-                .await
-                .map(|response| Some(response.into())),
-            ClientRequest::WorkflowWorkspacePrepare { params, .. } => self
-                .turn_processor
-                .workflow_workspace_prepare(params)
-                .await
-                .map(|response| Some(response.into())),
-            ClientRequest::WorkflowWorkspaceRelease { params, .. } => self
-                .turn_processor
-                .workflow_workspace_release(params)
-                .await
-                .map(|response| Some(response.into())),
-            ClientRequest::WorkflowWorkerStart { params, .. } => self
-                .turn_processor
-                .workflow_worker_start(&request_id, params)
-                .await
-                .map(|response| Some(response.into())),
+            request @ (ClientRequest::WorkflowAuthorityCapture { .. }
+            | ClientRequest::WorkflowScriptRead { .. }
+            | ClientRequest::WorkflowSave { .. }
+            | ClientRequest::WorkflowCompletionInject { .. }
+            | ClientRequest::WorkflowWorkspacePrepare { .. }
+            | ClientRequest::WorkflowWorkspaceRelease { .. }
+            | ClientRequest::WorkflowWorkerStart { .. }) => {
+                self.dispatch_workflow_request(&request_id, request).await
+            }
             ClientRequest::ThreadUnsubscribe { params, .. } => {
                 let thread_id = params.thread_id.clone();
                 let response = self
