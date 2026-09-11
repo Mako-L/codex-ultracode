@@ -7,29 +7,29 @@
    UI inspection: two sorting explainers, one comparison                                                                            3/3 agents · 32s · done
 
    ╭ Inspect · 2 agents ────┬ explain:merge sort ─────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-   │ ❯ ✔ explain:merge sort │  ✔ Completed · gpt-5                                                                                                        │
-   │   ✔ explain:quicksort  │  40.2k tok · 7s                                                                                                             │
+   │ ❯ ✔ explain:merge sort │ ✔ Completed · gpt-5                                                                                                         │
+   │   ✔ explain:quicksort  │ 40.2k tok · 7s                                                                                                              │
    │                        │                                                                                                                             │
-   │                        │  Prompt                                                                                                                     │
-   │                        │    Explain merge sort in about 150 words.                                                                                   │
+   │                        │ Prompt                                                                                                                      │
+   │                        │   Explain merge sort in about 150 words. Use no tools. Do not read files, run commands, or search. Return only the text.    │
    │                        │                                                                                                                             │
-   │                        │  Activity                                                                                                                   │
-   │                        │    No tool calls.                                                                                                           │
+   │                        │ Activity                                                                                                                    │
+   │                        │   No tool calls.                                                                                                            │
    │                        │                                                                                                                             │
-   │                        │  Outcome                                                                                                                    │
-   │                        │    Merge sort divides, then merges.                                                                                         │
+   │                        │ Outcome                                                                                                                     │
+   │                        │   Merge sort is a divide-and-conquer sorting algorithm with O(n log n) time complexity. It works in two phases:             │
    │                        │                                                                                                                             │
+   │                        │   **Divide:** Recursively split the array in half until each sublist contains a single element (trivially sorted).          │
    │                        │                                                                                                                             │
+   │                        │   **Merge:** Repeatedly combine adjacent sublists by comparing their front elements and pulling the smaller one into a new  │
+   │                        │   sorted list, continuing until all elements are merged back into one fully sorted array.                                   │
    │                        │                                                                                                                             │
+   │                        │   Because the array is halved at each level, there are log n levels of recursion, and merging all sublists at each level ta │
+   │                        │   kes O(n) work, giving O(n log n) overall — better than O(n²) algorithms like bubble or insertion sort for large inputs.   │
    │                        │                                                                                                                             │
-   │                        │                                                                                                                             │
-   │                        │                                                                                                                             │
-   │                        │                                                                                                                             │
-   │                        │                                                                                                                             │
-   │                        │                                                                                                                             │
-   │                        │                                                                                                                             │
-   │                        │                                                                                                                             │
-   │                        │                                                                                                                             │
+   │                        │   Its main tradeoff is space: the standard implementation requires O(n) auxiliary memory for the merge step, unlike in-plac │
+   │                        │   e sorts such as quicksort. It's stable (preserves the relative order of equal elements) and performs consistently regardl │
+   │                        │   ess of input order, making it well-suited for linked lists and external sorting of data too large for memory.             │
    │                        │                                                                                                                             │
    │                        │                                                                                                                             │
    │                        │                                                                                                                             │
