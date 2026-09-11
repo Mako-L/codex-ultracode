@@ -1022,10 +1022,18 @@ fn render_overview(view: &WorkflowView, width: usize, height: usize) -> Vec<Stri
 
 impl Widget for &WorkflowView {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        Paragraph::new(
-            self.lines(area.width as usize, area.height as usize)
-                .join("\n"),
-        )
+        let label_width = (self.state.screen == WorkflowScreen::Overview).then(|| {
+            self.workers()
+                .iter()
+                .map(|worker| cell_width(worker["label"].as_str().unwrap_or_default()))
+                .max()
+                .unwrap_or(0)
+                .max(12)
+        });
+        Paragraph::new(crate::workflow_view_style::styled_lines(
+            self.lines(area.width as usize, area.height as usize),
+            label_width,
+        ))
         .render(area, buf)
     }
 }
@@ -1166,6 +1174,34 @@ mod tests {
             .unwrap_or(0);
         lines[start..].join("\n").trim_end().to_string()
     }
+    #[test]
+    fn captured_workflow_styles_are_rendered_in_native_cells() {
+        use ratatui::style::Color;
+        use ratatui::style::Modifier;
+
+        let view = WorkflowView::new(json!({"runs":[run()]}), None);
+        let area = Rect::new(0, 0, 160, 48);
+        let mut buffer = Buffer::empty(area);
+        view.render(area, &mut buffer);
+        let find = |needle: &str| {
+            (0..area.height)
+                .find_map(|y| {
+                    let row: String = (0..area.width).map(|x| buffer[(x, y)].symbol()).collect();
+                    row.find(needle).map(|offset| {
+                        let x = UnicodeWidthStr::width(&row[..offset]) as u16;
+                        &buffer[(x, y)]
+                    })
+                })
+                .unwrap_or_else(|| panic!("missing rendered text: {needle}"))
+        };
+        assert_eq!(find("ui-reference").fg, Color::LightBlue);
+        assert!(find("ui-reference").modifier.contains(Modifier::BOLD));
+        assert_eq!(find("╭").fg, Color::White);
+        assert_eq!(find("❯").fg, Color::LightBlue);
+        assert_eq!(find("↑↓").fg, Color::Gray);
+        assert!(find("↑↓").modifier.contains(Modifier::ITALIC));
+    }
+
     #[test]
     fn narrow_unicode_wrap_always_advances() {
         assert_eq!(wrap("界 🌍", 1), vec!["界", "🌍"]);
