@@ -3,6 +3,7 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use serde_json::Value;
@@ -73,6 +74,7 @@ pub(crate) enum WorkflowAction {
 pub(crate) struct WorkflowView {
     snapshot: Value,
     detail_scroll_limit: Cell<usize>,
+    pub(crate) styles_enabled: bool,
     pub state: WorkflowViewState,
 }
 
@@ -82,6 +84,7 @@ impl WorkflowView {
         Self {
             snapshot,
             detail_scroll_limit: Cell::new(0),
+            styles_enabled: true,
             state: view.unwrap_or(WorkflowViewState {
                 screen: if count == 1 {
                     WorkflowScreen::Overview
@@ -1055,11 +1058,13 @@ impl Widget for &WorkflowView {
                 .unwrap_or(0)
                 .max(12)
         });
-        Paragraph::new(crate::workflow_view_style::styled_lines(
-            self.lines(area.width as usize, area.height as usize),
-            label_width,
-        ))
-        .render(area, buf)
+        let lines = self.lines(area.width as usize, area.height as usize);
+        let lines = if self.styles_enabled {
+            crate::workflow_view_style::styled_lines(lines, label_width)
+        } else {
+            lines.into_iter().map(Line::raw).collect()
+        };
+        Paragraph::new(lines).render(area, buf)
     }
 }
 
@@ -1389,11 +1394,22 @@ mod tests {
             if let Some(effort) = case["effort"].as_str() {
                 v.state.effort = effort.into()
             }
+            v.styles_enabled = case["capture"].as_str().unwrap()[..2]
+                .parse::<u8>()
+                .unwrap()
+                >= 12;
             let output = text(&v, 160, 48);
+            let area = Rect::new(0, 0, 160, 48);
+            let mut buffer = Buffer::empty(area);
+            v.render(area, &mut buffer);
+            if !v.styles_enabled {
+                for cell in &buffer.content {
+                    assert_eq!(cell.fg, ratatui::style::Color::Reset);
+                    assert_eq!(cell.bg, ratatui::style::Color::Reset);
+                    assert!(cell.modifier.is_empty());
+                }
+            }
             if let Some(directory) = std::env::var_os("ULTRACODE_NATIVE_CELL_OUTPUT") {
-                let area = Rect::new(0, 0, 160, 48);
-                let mut buffer = Buffer::empty(area);
-                v.render(area, &mut buffer);
                 let cells: Vec<_> = (0..48)
                     .flat_map(|row| {
                         let buffer = &buffer;
@@ -1415,7 +1431,7 @@ mod tests {
                 std::fs::create_dir_all(&directory).unwrap();
                 std::fs::write(
                     directory.join(format!("{}.json", case["capture"].as_str().unwrap())),
-                    serde_json::to_vec(&json!({"columns":160,"rows":48,"case":case,"cells":cells}))
+                    serde_json::to_vec(&json!({"columns":160,"rows":48,"case":case,"stylesEnabled":v.styles_enabled,"cells":cells}))
                         .unwrap(),
                 )
                 .unwrap();

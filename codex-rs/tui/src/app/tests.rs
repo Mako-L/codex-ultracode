@@ -42,6 +42,9 @@ mod thread_usage;
 mod turn_submission;
 #[path = "tests/workflow_consent_tests.rs"]
 mod workflow_consent_tests;
+#[cfg(unix)]
+#[path = "tests/workflow_controls_tests.rs"]
+mod workflow_controls_tests;
 #[path = "tests/workflow_effort_tests.rs"]
 mod workflow_effort_tests;
 #[path = "tests/workflow_save_tests.rs"]
