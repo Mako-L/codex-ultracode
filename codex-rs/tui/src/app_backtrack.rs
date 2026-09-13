@@ -219,7 +219,11 @@ impl App {
             }
             WorkflowAction::PauseRun { run_id } => call("pauseRun", json!({"runId":run_id})).await,
             WorkflowAction::ResumeRun { run_id } => {
-                call("resumeRun", json!({"runId":run_id})).await
+                call("resumeRun", json!({"runId":run_id}))
+                    .await
+                    .map_err(|error| error.to_string())?;
+                self.close_transcript_overlay(tui);
+                return Ok(());
             }
             WorkflowAction::StopRun { run_id, worker_id } => {
                 call("stopRun", json!({"runId":run_id,"workerId":worker_id})).await

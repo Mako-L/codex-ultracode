@@ -110,6 +110,7 @@ pub(crate) struct WorkflowOverlay {
 impl WorkflowOverlay {
     pub(crate) fn new(snapshot: serde_json::Value, effort: Option<String>) -> Self {
         let mut view = WorkflowView::new(snapshot, None);
+        view.styles_enabled = supports_color::on_cached(supports_color::Stream::Stdout).is_some();
         if let Some(effort) = effort {
             view.state.screen = WorkflowScreen::Effort;
             if !effort.is_empty() {
