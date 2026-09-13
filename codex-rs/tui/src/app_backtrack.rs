@@ -98,6 +98,10 @@ impl App {
         app_server: &mut AppServerSession,
         event: TuiEvent,
     ) -> Result<bool> {
+        if matches!(self.overlay, Some(Overlay::Static(_))) {
+            self.overlay_forward_event(tui, event)?;
+            return Ok(true);
+        }
         if let TuiEvent::Key(key) = event
             && let Some(Overlay::Workflow(overlay)) = self.overlay.as_mut()
         {

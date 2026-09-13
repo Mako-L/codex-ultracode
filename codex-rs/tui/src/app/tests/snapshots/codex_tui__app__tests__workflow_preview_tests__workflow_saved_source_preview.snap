@@ -1,0 +1,16 @@
+---
+source: tui/src/app/tests/workflow_preview_tests.rs
+assertion_line: 291
+expression: rendered
+---
+/ Workflow source / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / /
+export const meta = {name: 'saved'};
+return 'saved source';
+~
+~
+~
+~
+~
+───────────────────────────────────────────────────────────────────────── 100% ─
+ ↑/↓ to scroll   pgup/pgdn to page   home/end to jump
+ esc to quit

@@ -54,7 +54,7 @@ fn workflow_state_dir(codex_home: &Path, cwd: &Path, thread_id: &str) -> std::io
 }
 
 impl App {
-    async fn ensure_workflow_session(
+    pub(super) async fn ensure_workflow_session(
         &mut self,
         authority: &codex_app_server_protocol::WorkflowAuthorityCaptureResponse,
         session_key: &str,
@@ -335,69 +335,31 @@ impl App {
                 if allowed {
                     self.app_event_tx
                         .send(AppEvent::Workflow(WorkflowEvent::RunSavedConsent {
+                            thread_id: key,
                             name,
                             args,
                             choice: WorkflowConsentChoice::Run,
+                            preview: None,
                         }));
                 } else {
-                    let yes_name = name.clone();
-                    let yes_args = args.clone();
-                    let remember_name = name.clone();
-                    let remember_args = args.clone();
-                    let no_name = name.clone();
-                    let no_args = args.clone();
-                    self.chat_widget.show_selection_view(SelectionViewParams {
-                        title: Some(format!("Run workflow /{name}?")),
-                        items: vec![
-                            SelectionItem {
-                                name: "Run once".into(),
-                                actions: vec![Box::new(move |tx| {
-                                    tx.send(AppEvent::Workflow(WorkflowEvent::RunSavedConsent {
-                                        name: yes_name.clone(),
-                                        args: yes_args.clone(),
-                                        choice: WorkflowConsentChoice::Run,
-                                    }))
-                                })],
-                                dismiss_on_select: true,
-                                ..Default::default()
-                            },
-                            SelectionItem {
-                                name: "Run and remember for this project".into(),
-                                actions: vec![Box::new(move |tx| {
-                                    tx.send(AppEvent::Workflow(WorkflowEvent::RunSavedConsent {
-                                        name: remember_name.clone(),
-                                        args: remember_args.clone(),
-                                        choice: WorkflowConsentChoice::Remember,
-                                    }))
-                                })],
-                                dismiss_on_select: true,
-                                ..Default::default()
-                            },
-                            SelectionItem {
-                                name: "Cancel".into(),
-                                actions: vec![Box::new(move |tx| {
-                                    tx.send(AppEvent::Workflow(WorkflowEvent::RunSavedConsent {
-                                        name: no_name.clone(),
-                                        args: no_args.clone(),
-                                        choice: WorkflowConsentChoice::Cancel,
-                                    }))
-                                })],
-                                dismiss_on_select: true,
-                                ..Default::default()
-                            },
-                        ],
-                        ..Default::default()
-                    });
+                    let arguments = serde_json::json!({"name":name});
+                    let preview = self
+                        .prepare_workflow_preview(app_server, &key, &arguments)
+                        .await?;
+                    self.show_saved_workflow_consent(key, name, args, preview);
                 }
             }
-            WorkflowEvent::RunSavedConsent { name, args, choice } => {
+            WorkflowEvent::RunSavedConsent {
+                thread_id,
+                name,
+                args,
+                choice,
+                preview,
+            } => {
                 if matches!(choice, WorkflowConsentChoice::Cancel) {
                     return Ok(());
                 }
-                let thread_id = self
-                    .chat_widget
-                    .thread_id()
-                    .ok_or_else(|| color_eyre::eyre::eyre!("Parent session is unavailable"))?;
+
                 let authority = app_server
                     .workflow_authority_capture(
                         codex_app_server_protocol::WorkflowAuthorityCaptureParams {
@@ -414,12 +376,13 @@ impl App {
                 if let Some(args) = args {
                     arguments["args"] = serde_json::Value::String(args);
                 }
-                let launch = crate::ultracode_launch::launch(
+                let launch = crate::ultracode_launch::launch_with_preview(
                     &app_server.request_handle(),
                     &key,
                     &authority,
                     &bridge,
                     &arguments,
+                    preview.as_ref(),
                 )
                 .await?;
                 if matches!(choice, WorkflowConsentChoice::Remember) {
@@ -433,15 +396,30 @@ impl App {
                         .remember_named(Path::new(&authority.cwd), &name, digest)?;
                 }
                 let result = launch.result?;
-                self.chat_widget.add_info_message(
-                    format!("Workflow /{name} launched"),
-                    result
-                        .get("scriptPath")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_string),
-                );
+                if self
+                    .chat_widget
+                    .thread_id()
+                    .is_some_and(|current| current.to_string() == key)
+                {
+                    self.chat_widget.add_info_message(
+                        format!("Workflow /{name} launched"),
+                        result
+                            .get("scriptPath")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_string),
+                    );
+                }
             }
             WorkflowEvent::ToolCall { request_id, params } => {
+                if self.config.disable_workflows {
+                    self.app_event_tx.send(AppEvent::DynamicToolCallCompleted {
+                        request_id,
+                        response: crate::dynamic_tools::failure_response(
+                            "Workflows are disabled by configuration.",
+                        ),
+                    });
+                    return Ok(());
+                }
                 if let Err(error) = crate::ultracode_launch::validate_arguments(&params.arguments) {
                     self.app_event_tx.send(AppEvent::DynamicToolCallCompleted {
                         request_id,
@@ -458,10 +436,8 @@ impl App {
                         )?
                         .allows_auto_first_launch());
                 let mut named_allowed = false;
-                if let Some(name) = params
-                    .arguments
-                    .get("name")
-                    .and_then(serde_json::Value::as_str)
+                if let Ok(crate::ultracode_source::SourceLocation::Saved(name)) =
+                    crate::ultracode_source::source_location(&params.arguments)
                 {
                     let authority = app_server
                         .workflow_authority_capture(
@@ -508,18 +484,41 @@ impl App {
                             request_id,
                             params,
                             choice: WorkflowConsentChoice::Run,
+                            preview: None,
                         }));
                 } else {
-                    self.show_workflow_consent(request_id, params)
+                    let preview = self
+                        .prepare_workflow_preview(app_server, &params.thread_id, &params.arguments)
+                        .await?;
+                    self.show_workflow_consent(request_id, params, preview)
                 }
             }
-            WorkflowEvent::ViewScript(script) => self
-                .chat_widget
-                .add_info_message("Workflow source".into(), Some(script)),
+            WorkflowEvent::ViewScript { thread_id, source } => {
+                if self
+                    .chat_widget
+                    .thread_id()
+                    .is_some_and(|current| current.to_string() == thread_id)
+                {
+                    let _ = tui.enter_alt_screen();
+                    let source = crate::history_cell::sanitize_user_text(source.into());
+                    let mut keymap = self.keymap.pager.clone();
+                    keymap.close.insert(0, crate::key_hint::plain(KeyCode::Esc));
+                    self.overlay = Some(Overlay::new_static_with_lines(
+                        source
+                            .lines()
+                            .map(|line| ratatui::text::Line::from(line.to_owned()))
+                            .collect(),
+                        "Workflow source".into(),
+                        keymap,
+                    ));
+                    tui.frame_requester().schedule_frame();
+                }
+            }
             WorkflowEvent::Consent {
                 request_id,
                 params,
                 choice,
+                preview,
             } => {
                 if matches!(choice, WorkflowConsentChoice::Cancel) {
                     self.app_event_tx.send(AppEvent::DynamicToolCallCompleted {
@@ -548,12 +547,13 @@ impl App {
                     .unwrap()
                     .bridge
                     .clone();
-                let launch = crate::ultracode_launch::launch(
+                let launch = crate::ultracode_launch::launch_with_preview(
                     &app_server.request_handle(),
                     &session_key,
                     &authority,
                     &bridge,
                     &params.arguments,
+                    preview.as_ref(),
                 )
                 .await?;
                 let source_digest = launch.source_digest;
@@ -1011,110 +1011,6 @@ impl App {
             }
         }
         Ok(())
-    }
-
-    fn show_workflow_consent(
-        &mut self,
-        request_id: codex_app_server_protocol::RequestId,
-        params: codex_app_server_protocol::DynamicToolCallParams,
-    ) {
-        if self.config.disable_workflows {
-            self.app_event_tx.send(AppEvent::DynamicToolCallCompleted {
-                request_id,
-                response: crate::dynamic_tools::failure_response(
-                    "Workflows are disabled by configuration.",
-                ),
-            });
-            return;
-        }
-        let script = params
-            .arguments
-            .get("script")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("Saved workflow source is resolved by its verified identity.")
-            .to_string();
-        self.chat_widget.show_selection_view(SelectionViewParams {
-            title: Some("Run workflow?".into()),
-            subtitle: Some("This workflow may start multiple native Codex workers.".into()),
-            on_cancel: Some(Box::new({
-                let request_id = request_id.clone();
-                let params = params.clone();
-                move |tx| {
-                    tx.send(AppEvent::Workflow(WorkflowEvent::Consent {
-                        request_id: request_id.clone(),
-                        params: params.clone(),
-                        choice: WorkflowConsentChoice::Cancel,
-                    }));
-                }
-            })),
-            items: vec![
-                SelectionItem {
-                    name: "Run once".into(),
-                    actions: vec![Box::new({
-                        let request_id = request_id.clone();
-                        let params = params.clone();
-                        move |tx| {
-                            tx.send(AppEvent::Workflow(WorkflowEvent::Consent {
-                                request_id: request_id.clone(),
-                                params: params.clone(),
-                                choice: WorkflowConsentChoice::Run,
-                            }))
-                        }
-                    })],
-                    dismiss_on_select: true,
-                    ..Default::default()
-                },
-                SelectionItem {
-                    name: "Run and remember for this project".into(),
-                    is_disabled: params.arguments.get("name").is_none(),
-                    disabled_reason: params
-                        .arguments
-                        .get("name")
-                        .is_none()
-                        .then(|| "Inline workflows cannot be remembered".into()),
-                    actions: vec![Box::new({
-                        let request_id = request_id.clone();
-                        let params = params.clone();
-                        move |tx| {
-                            tx.send(AppEvent::Workflow(WorkflowEvent::Consent {
-                                request_id: request_id.clone(),
-                                params: params.clone(),
-                                choice: WorkflowConsentChoice::Remember,
-                            }))
-                        }
-                    })],
-                    dismiss_on_select: true,
-                    ..Default::default()
-                },
-                SelectionItem {
-                    name: "View raw script".into(),
-                    actions: vec![Box::new(move |tx| {
-                        tx.send(AppEvent::Workflow(WorkflowEvent::ViewScript(
-                            script.clone(),
-                        )))
-                    })],
-                    dismiss_on_select: false,
-                    ..Default::default()
-                },
-                SelectionItem {
-                    name: "Cancel".into(),
-                    actions: vec![Box::new({
-                        let request_id = request_id;
-                        let params = params.clone();
-                        move |tx| {
-                            tx.send(AppEvent::Workflow(WorkflowEvent::Consent {
-                                request_id: request_id.clone(),
-                                params: params.clone(),
-                                choice: WorkflowConsentChoice::Cancel,
-                            }))
-                        }
-                    })],
-                    dismiss_on_select: true,
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        });
     }
 }
 

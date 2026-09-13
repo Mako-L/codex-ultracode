@@ -1,0 +1,214 @@
+use crate::ultracode_bridge::BridgeError;
+use crate::ultracode_bridge::UltracodeBridge;
+use codex_app_server_client::AppServerRequestHandle;
+use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::WorkflowAuthorityCaptureResponse;
+use codex_app_server_protocol::WorkflowScriptReadParams;
+use codex_app_server_protocol::WorkflowScriptReadResponse;
+use serde_json::Value;
+use serde_json::json;
+use sha2::Digest;
+use sha2::Sha256;
+use std::time::Duration;
+use uuid::Uuid;
+
+/// Source bytes and identity selected for one originating thread's consent.
+/// This is local UI state, never a dynamic-tool argument or model-history item.
+#[derive(Clone, Debug)]
+pub(crate) struct WorkflowSourcePreview {
+    pub(crate) thread_id: String,
+    pub(crate) source: String,
+    pub(crate) digest: String,
+    pub(crate) workflow_id: Option<String>,
+    resolved_path: Option<String>,
+    resume_run_id: Option<String>,
+    saved_name: Option<String>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum SourceLocation<'a> {
+    Saved(&'a str),
+    File(&'a str),
+    Inline(&'a str),
+    Resumed(&'a str),
+}
+
+pub(crate) fn source_location(arguments: &Value) -> Result<SourceLocation<'_>, BridgeError> {
+    if arguments.get("resumeFromRunId").is_none()
+        && let Some(name) = arguments.get("name").and_then(Value::as_str)
+    {
+        return Ok(SourceLocation::Saved(name));
+    }
+    if let Some(path) = arguments.get("scriptPath").and_then(Value::as_str) {
+        return Ok(SourceLocation::File(path));
+    }
+    if let Some(source) = arguments.get("script").and_then(Value::as_str) {
+        return Ok(SourceLocation::Inline(source));
+    }
+    if let Some(run) = arguments.get("resumeFromRunId").and_then(Value::as_str) {
+        return Ok(SourceLocation::Resumed(run));
+    }
+    Err(BridgeError::host("Workflow source is unavailable"))
+}
+
+impl WorkflowSourcePreview {
+    pub(crate) fn inline(thread_id: &str, arguments: &Value) -> Option<Self> {
+        let SourceLocation::Inline(source) = source_location(arguments).ok()? else {
+            return None;
+        };
+        Some(Self {
+            thread_id: thread_id.to_owned(),
+            source: source.to_owned(),
+            digest: format!("{:x}", Sha256::digest(source.as_bytes())),
+            workflow_id: None,
+            resolved_path: None,
+            resume_run_id: arguments
+                .get("resumeFromRunId")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            saved_name: None,
+        })
+    }
+}
+
+pub(crate) async fn read_file(
+    handle: &AppServerRequestHandle,
+    thread_id: &str,
+    authority: &WorkflowAuthorityCaptureResponse,
+    path: &str,
+) -> Result<WorkflowScriptReadResponse, BridgeError> {
+    handle
+        .request_typed(ClientRequest::WorkflowScriptRead {
+            request_id: RequestId::String(format!("workflow-script:{}", Uuid::new_v4())),
+            params: WorkflowScriptReadParams {
+                parent_thread_id: thread_id.to_owned(),
+                authority_ref: authority.authority_ref.clone(),
+                authority_digest: authority.authority_digest.clone(),
+                script_path: path.to_owned(),
+            },
+        })
+        .await
+        .map_err(|error| BridgeError::host(error.to_string()))
+}
+
+pub(crate) async fn read_preview(
+    handle: &AppServerRequestHandle,
+    thread_id: &str,
+    authority: &WorkflowAuthorityCaptureResponse,
+    bridge: &UltracodeBridge,
+    arguments: &Value,
+    selected: Option<&WorkflowSourcePreview>,
+) -> Result<WorkflowSourcePreview, BridgeError> {
+    if selected.is_some_and(|preview| preview.thread_id != thread_id) {
+        return Err(BridgeError::host(
+            "Workflow preview belongs to another parent",
+        ));
+    }
+    let preview = if let Some(inline) = WorkflowSourcePreview::inline(thread_id, arguments) {
+        inline
+    } else {
+        let (source, expected_digest, workflow_id, resolved_path) =
+            match source_location(arguments)? {
+                SourceLocation::File(path) => {
+                    let file = read_file(handle, thread_id, authority, path).await?;
+                    (
+                        file.source,
+                        file.source_digest,
+                        None,
+                        Some(file.resolved_path),
+                    )
+                }
+                SourceLocation::Saved(name) => {
+                    let workflow_id = if let Some(selected) = selected {
+                        selected
+                            .workflow_id
+                            .clone()
+                            .ok_or_else(|| BridgeError::host("Workflow preview identity changed"))?
+                    } else {
+                        let catalog = bridge
+                            .request(
+                                "listSavedWorkflows",
+                                json!({"cwd":authority.cwd}),
+                                Duration::from_secs(30),
+                            )
+                            .await?;
+                        catalog["workflows"]
+                            .as_array()
+                            .and_then(|items| items.iter().find(|item| item["name"] == name))
+                            .and_then(|item| item["workflowId"].as_str())
+                            .map(str::to_owned)
+                            .ok_or_else(|| BridgeError::host("Saved workflow not found"))?
+                    };
+                    let saved = bridge
+                        .request(
+                            "readSavedSource",
+                            json!({"workflowId":workflow_id}),
+                            Duration::from_secs(30),
+                        )
+                        .await?;
+                    let source = saved["source"]
+                        .as_str()
+                        .ok_or_else(|| BridgeError::host("Saved workflow source is unavailable"))?
+                        .to_owned();
+                    let digest = saved["digest"]
+                        .as_str()
+                        .ok_or_else(|| BridgeError::host("Saved workflow digest is unavailable"))?
+                        .to_owned();
+                    if saved["workflowId"] != workflow_id {
+                        return Err(BridgeError::host("Saved workflow identity changed"));
+                    }
+                    (source, digest, Some(workflow_id), None)
+                }
+                SourceLocation::Resumed(run_id) => {
+                    let run = bridge.inspect_run(run_id).await?;
+                    if run["id"] != run_id {
+                        return Err(BridgeError::host("Workflow resume identity changed"));
+                    }
+                    let source = run["source"]
+                        .as_str()
+                        .ok_or_else(|| BridgeError::host("Resumed workflow source is unavailable"))?
+                        .to_owned();
+                    let digest = run["sourceDigest"]
+                        .as_str()
+                        .ok_or_else(|| BridgeError::host("Resumed workflow digest is unavailable"))?
+                        .to_owned();
+                    (source, digest, None, None)
+                }
+                SourceLocation::Inline(_) => unreachable!("inline source handled above"),
+            };
+        let digest = format!("{:x}", Sha256::digest(source.as_bytes()));
+        if digest != expected_digest {
+            return Err(BridgeError::host(
+                "Workflow source digest does not match its identity",
+            ));
+        }
+        WorkflowSourcePreview {
+            thread_id: thread_id.to_owned(),
+            source,
+            digest,
+            workflow_id,
+            resolved_path,
+            resume_run_id: arguments
+                .get("resumeFromRunId")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            saved_name: match source_location(arguments)? {
+                SourceLocation::Saved(name) => Some(name.to_owned()),
+                _ => None,
+            },
+        }
+    };
+    if let Some(selected) = selected
+        && (preview.digest != selected.digest
+            || preview.workflow_id != selected.workflow_id
+            || preview.resolved_path != selected.resolved_path
+            || preview.resume_run_id != selected.resume_run_id
+            || preview.saved_name != selected.saved_name)
+    {
+        return Err(BridgeError::host(
+            "Workflow source changed after preview; request consent again",
+        ));
+    }
+    Ok(preview)
+}

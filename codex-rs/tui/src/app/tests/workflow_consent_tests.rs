@@ -57,6 +57,7 @@ async fn cancelled_workflow_answers_tool_without_launch_or_persistence() -> Resu
             request_id: AppServerRequestId::Integer(41),
             params: inline_call(),
             choice: WorkflowConsentChoice::Cancel,
+            preview: None,
         },
     )
     .await?;
@@ -142,6 +143,7 @@ async fn keyboard_cancellation_answers_pending_workflow_consent() -> Result<()> 
             request_id,
             params: cancelled_params,
             choice: WorkflowConsentChoice::Cancel,
+            preview: None,
         })) = cancellation
         else {
             panic!("Expected workflow cancellation");
@@ -158,6 +160,7 @@ async fn keyboard_cancellation_answers_pending_workflow_consent() -> Result<()> 
                 request_id,
                 params: cancelled_params,
                 choice: WorkflowConsentChoice::Cancel,
+                preview: None,
             },
         )
         .await?;
