@@ -248,6 +248,7 @@ mod thread_settings;
 mod thread_title;
 mod transcript_export;
 mod workflow;
+mod workflow_consent_render;
 mod workflow_editor;
 mod workflow_effort;
 mod workflow_preview;

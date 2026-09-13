@@ -125,3 +125,12 @@ test('presentation rejects malformed direct inputs',()=>{
   assert.throws(()=>workflowConsentPresentation(null,{meta:{},body:''}),/source must be a string/i);
   assert.throws(()=>workflowConsentPresentation('',{meta:{},body:null}),/body must be a string/i);
 });
+
+test('args gutter uses emoji and combining sequence terminal width',()=>{
+  assert.equal(present('',{args:'😀'.repeat(40)}).args.needsGutter,false);
+  assert.equal(present('',{args:'😀'.repeat(41)}).args.needsGutter,true);
+  assert.equal(present('',{args:'🇷🇴'.repeat(40)}).args.needsGutter,false);
+  assert.equal(present('',{args:'🇷🇴'.repeat(41)}).args.needsGutter,true);
+  assert.equal(present('',{args:'e\u0301'.repeat(80)}).args.needsGutter,false);
+  assert.equal(present('',{args:'e\u0301'.repeat(81)}).args.needsGutter,true);
+});

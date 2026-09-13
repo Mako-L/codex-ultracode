@@ -1,3 +1,5 @@
+import stringWidth from 'string-width';
+
 const PROMPT_LIMIT=100;
 const SCAN_LIMIT=5000;
 const PRESENTATION_LIMIT=200000;
@@ -6,8 +8,6 @@ const DEPTH_LIMIT=64;
 const ARG_WITHHELD='(value cannot be shown in full — approval withheld; one-time options only)';
 const unsafeControl=/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u;
 const invisible=/[\p{Default_Ignorable_Code_Point}\p{Cf}\u2028\u2029\u2800]/u;
-const combining=/\p{Mark}/u;
-const zeroWidth=/[\p{Default_Ignorable_Code_Point}\p{Cf}]/u;
 const variationSelector=/[\u180b-\u180f\ufe0e\ufe0f]/u;
 
 const identifier=character=>character!==undefined&&/[A-Za-z0-9_]/.test(character);
@@ -20,25 +20,11 @@ const scrubSource=value=>Array.from(value,character=>{
 }).join('');
 const normalize=value=>scrub(String(value)).replace(/\s+/g,' ').trim();
 
-function characterWidth(character) {
-  if(!character)return 0;
-  const code=character.codePointAt(0);
-  if(combining.test(character)||zeroWidth.test(character)||code<=0x1f||code>=0x7f&&code<=0x9f)return 0;
-  return code>=0x1100&&(code<=0x115f||code===0x2329||code===0x232a||
-    code>=0x2e80&&code<=0xa4cf&&code!==0x303f||code>=0xac00&&code<=0xd7a3||
-    code>=0xf900&&code<=0xfaff||code>=0xfe10&&code<=0xfe19||
-    code>=0xfe30&&code<=0xfe6f||code>=0xff00&&code<=0xff60||
-    code>=0xffe0&&code<=0xffe6||code>=0x1b000&&code<=0x1b001||
-    code>=0x1f200&&code<=0x1f251||code>=0x20000&&code<=0x3fffd)?2:1;
-}
-
-const displayWidth=value=>Array.from(value).reduce((width,character)=>width+characterWidth(character),0);
-
 function hasUnsafeZeroWidthRun(value) {
   let run=0;
   for(const character of value){
     if(character==='\n'){run=0;continue;}
-    if(characterWidth(variationSelector.test(character)?'':character)>0)run=0;
+    if(stringWidth(variationSelector.test(character)?'':character)>0)run=0;
     else if(++run>8)return true;
   }
   return false;
@@ -209,7 +195,7 @@ function presentArgs(value) {
   if(text===undefined||text.length>PRESENTATION_LIMIT||hasUnsafeZeroWidthRun(text))return {text:ARG_WITHHELD,needsGutter:false,withheld:true};
   text=scrub(text).replace(/\t/g,' ');
   if(unsafeControl.test(text))return {text:ARG_WITHHELD,needsGutter:false,withheld:true};
-  return {text,needsGutter:text.includes('\n')||displayWidth(text)>80,withheld:false};
+  return {text,needsGutter:text.includes('\n')||stringWidth(text)>80,withheld:false};
 }
 
 function presentSource(source) {

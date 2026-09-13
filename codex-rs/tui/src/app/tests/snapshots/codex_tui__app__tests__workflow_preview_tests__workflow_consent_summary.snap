@@ -4,13 +4,11 @@ expression: "render_bottom_popup(&app.chat_widget, 100)"
 ---
   Run a dynamic workflow?
 
-  Workflow Proof workflow
   Checks the consent summary before launching.
 
-  Phases
-  1. Inspect
-     Read the selected source bytes.
-  2. Report
+  This dynamic workflow will spin up multiple subagents across the following phases:
+    1. Inspect — Read the selected source bytes.
+    2. Report
 
   You can stop a running workflow at any time with /workflows, or disable dynamic workflows in
   /config.
