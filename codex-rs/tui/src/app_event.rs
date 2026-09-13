@@ -1403,6 +1403,7 @@ pub(crate) enum WorkflowEvent {
         name: String,
         args: Option<String>,
         choice: WorkflowConsentChoice,
+        feedback: Option<String>,
         preview: Option<crate::ultracode_source::WorkflowSourcePreview>,
     },
     ToolCall {
@@ -1413,11 +1414,23 @@ pub(crate) enum WorkflowEvent {
         request_id: codex_app_server_protocol::RequestId,
         params: codex_app_server_protocol::DynamicToolCallParams,
         choice: WorkflowConsentChoice,
+        feedback: Option<String>,
         preview: Option<crate::ultracode_source::WorkflowSourcePreview>,
     },
     ViewScript {
         thread_id: String,
         source: String,
+    },
+    ToggleWorkflowPreview {
+        consent: WorkflowConsentContext,
+        feedback_state: WorkflowConsentFeedbackState,
+        preview: crate::ultracode_source::WorkflowSourcePreview,
+        mode: WorkflowPreviewMode,
+    },
+    EditWorkflowSource {
+        consent: WorkflowConsentContext,
+        feedback_state: WorkflowConsentFeedbackState,
+        preview: crate::ultracode_source::WorkflowSourcePreview,
     },
     Open {
         effort: Option<String>,
@@ -1446,6 +1459,48 @@ pub(crate) enum WorkflowEvent {
         thread_id: String,
         result: Result<WorkflowSaveResponse, String>,
     },
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum WorkflowConsentContext {
+    Dynamic {
+        request_id: codex_app_server_protocol::RequestId,
+        params: codex_app_server_protocol::DynamicToolCallParams,
+    },
+    Saved {
+        thread_id: String,
+        name: String,
+        args: Option<String>,
+    },
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct WorkflowConsentFeedbackState(
+    std::sync::Arc<std::sync::Mutex<WorkflowConsentFeedback>>,
+);
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct WorkflowConsentFeedback {
+    pub accept: String,
+    pub reject: String,
+    pub accept_expanded: bool,
+    pub reject_expanded: bool,
+}
+
+impl WorkflowConsentFeedbackState {
+    pub(crate) fn snapshot(&self) -> WorkflowConsentFeedback {
+        self.0.lock().expect("workflow feedback lock").clone()
+    }
+
+    pub(crate) fn update(&self, update: impl FnOnce(&mut WorkflowConsentFeedback)) {
+        update(&mut self.0.lock().expect("workflow feedback lock"));
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WorkflowPreviewMode {
+    Summary,
+    Raw,
 }
 
 #[derive(Debug, Clone, Copy)]

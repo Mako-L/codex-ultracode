@@ -1,0 +1,17 @@
+---
+source: tui/src/app/tests/workflow_preview_tests.rs
+expression: "render_bottom_popup(&app.chat_widget, 100)"
+---
+  Run a dynamic workflow?
+
+  Validation error: Unexpected token ';'
+
+  export const meta = ;
+
+  You can stop a running workflow at any time with /workflows, or disable dynamic workflows in
+  /config.
+
+     Yes, run it (disabled)  disabled: Unexpected token ';'
+› 1. No
+
+  ctrl + g edit in $EDITOR

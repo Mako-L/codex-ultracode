@@ -57,6 +57,7 @@ async fn cancelled_workflow_answers_tool_without_launch_or_persistence() -> Resu
             request_id: AppServerRequestId::Integer(41),
             params: inline_call(),
             choice: WorkflowConsentChoice::Cancel,
+            feedback: Some("use the saved workflow".into()),
             preview: None,
         },
     )
@@ -68,6 +69,18 @@ async fn cancelled_workflow_answers_tool_without_launch_or_persistence() -> Resu
         panic!("expected cancelled tool response")
     };
     assert!(!response.success);
+    assert_eq!(
+        response
+            .content_items
+            .iter()
+            .filter(|item| matches!(
+                item,
+                codex_app_server_protocol::DynamicToolCallOutputContentItem::InputText { text }
+                    if text == "Workflow consent feedback: use the saved workflow"
+            ))
+            .count(),
+        1
+    );
     assert!(app.workflow_sessions.is_empty());
     assert!(!home.path().join("workflow-consent.json").exists());
     app_server.shutdown().await?;
@@ -82,25 +95,18 @@ async fn manual_inline_consent_disables_remember_and_starts_nothing() -> Result<
         .approval_policy
         .set(AskForApproval::OnRequest.to_core())?;
     app.config.approvals_reviewer = ApprovalsReviewer::User;
-    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
-    let mut tui = crate::tui::test_support::make_test_tui()?;
-
-    app.handle_workflow_event(
-        &mut tui,
-        &mut app_server,
-        WorkflowEvent::ToolCall {
-            request_id: AppServerRequestId::Integer(42),
-            params: inline_call(),
-        },
+    let params = inline_call();
+    let preview = crate::ultracode_source::WorkflowSourcePreview::inline(
+        &params.thread_id,
+        &params.arguments,
     )
-    .await?;
-
+    .expect("inline workflow preview");
+    app.show_workflow_consent(AppServerRequestId::Integer(42), params, preview);
     assert!(events.try_recv().is_err());
     assert!(app.workflow_sessions.is_empty());
     let popup = render_bottom_popup(&app.chat_widget, 100);
-    assert!(popup.contains("Run once"));
-    assert!(popup.contains("Inline workflows cannot be remembered"));
-    app_server.shutdown().await?;
+    assert!(popup.contains("Yes, run it"));
+    assert!(!popup.contains("don't ask again"));
     Ok(())
 }
 
@@ -121,16 +127,13 @@ async fn keyboard_cancellation_answers_pending_workflow_consent() -> Result<()> 
         let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
         let mut tui = crate::tui::test_support::make_test_tui()?;
         let params = inline_call();
-        app.handle_workflow_event(
-            &mut tui,
-            &mut app_server,
-            WorkflowEvent::ToolCall {
-                request_id: AppServerRequestId::Integer(45),
-                params: params.clone(),
-            },
+        let preview = crate::ultracode_source::WorkflowSourcePreview::inline(
+            &params.thread_id,
+            &params.arguments,
         )
-        .await?;
-        assert!(render_bottom_popup(&app.chat_widget, 100).contains("Run once"));
+        .expect("inline workflow preview");
+        app.show_workflow_consent(AppServerRequestId::Integer(45), params.clone(), preview);
+        assert!(render_bottom_popup(&app.chat_widget, 100).contains("Yes, run it"));
         app.chat_widget.handle_key_event(key);
         let cancellation = events.try_recv().ok();
         if cancellation.is_none() {
@@ -143,6 +146,7 @@ async fn keyboard_cancellation_answers_pending_workflow_consent() -> Result<()> 
             request_id,
             params: cancelled_params,
             choice: WorkflowConsentChoice::Cancel,
+            feedback: None,
             preview: None,
         })) = cancellation
         else {
@@ -160,6 +164,7 @@ async fn keyboard_cancellation_answers_pending_workflow_consent() -> Result<()> 
                 request_id,
                 params: cancelled_params,
                 choice: WorkflowConsentChoice::Cancel,
+                feedback: None,
                 preview: None,
             },
         )
@@ -179,7 +184,7 @@ async fn keyboard_cancellation_answers_pending_workflow_consent() -> Result<()> 
         assert!(no_extra_response);
         assert!(app.workflow_sessions.is_empty());
         assert!(!home.path().join("workflow-consent.json").exists());
-        assert!(!render_bottom_popup(&app.chat_widget, 100).contains("Run once"));
+        assert!(!render_bottom_popup(&app.chat_widget, 100).contains("Yes, run it"));
     }
     Ok(())
 }

@@ -1,5 +1,8 @@
 use super::*;
 use crate::app_event::WorkflowEvent;
+use crate::app_event::WorkflowPreviewMode;
+use crate::ultracode_source::WorkflowMetadata;
+use crate::ultracode_source::WorkflowPhase;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::HashMap;
@@ -8,25 +11,6 @@ use std::collections::HashSet;
 const FILE_SOURCE: &str = "export const meta = {name: 'file'};\nreturn 'file source';";
 const SAVED_SOURCE: &str = "export const meta = {name: 'saved'};\nreturn 'saved source';";
 const RESUMED_SOURCE: &str = "export const meta = {name: 'resumed'};\nreturn 'resumed source';";
-
-fn preview_text(app: &mut App) -> String {
-    let area = ratatui::layout::Rect::new(0, 0, 80, 12);
-    let mut buffer = ratatui::buffer::Buffer::empty(area);
-    let Some(Overlay::Static(overlay)) = app.overlay.as_mut() else {
-        panic!("Expected read-only source pager");
-    };
-    overlay.render(area, &mut buffer);
-    (0..area.height)
-        .map(|y| {
-            (0..area.width)
-                .map(|x| buffer[(x, y)].symbol())
-                .collect::<String>()
-                .trim_end()
-                .to_owned()
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
 
 async fn preview_app_server(config: &Config, root: &Path) -> Result<AppServerSession> {
     let binary = codex_utils_cargo_bin::cargo_bin("codex-tui")?;
@@ -87,7 +71,7 @@ for await (const line of readline.createInterface({input:process.stdin})) {
       const source=fs.readFileSync('resumed.js','utf8');
       result={id:request.params.runId,source,sourceDigest:hash(source)};
     }
-    if(request.method==='validateSource')result={digest:hash(request.params.source)};
+    if(request.method==='validateSource')result={digest:hash(request.params.source),meta:{name:'preview',title:'Preview workflow',description:'Preview the selected workflow source.',phases:[{title:'Inspect',detail:'Read the selected bytes.'}]}};
     if(['runSource','runSaved','resumeRun'].includes(request.method))result={runId:'launched'};
     process.stdout.write(JSON.stringify({id:request.id,ok:true,result})+'\n');
   }catch(error){process.stdout.write(JSON.stringify({id:request.id,ok:false,error:{code:'CONFLICT',message:error.message}})+'\n');}
@@ -181,50 +165,31 @@ async fn workflow_consent_preview_shows_selected_source_for_every_launch_form() 
                 .handle_key_event(KeyEvent::new(code, KeyModifiers::NONE));
         }
         let event = events.try_recv().expect("source preview event");
-        let AppEvent::Workflow(WorkflowEvent::ViewScript {
-            source,
-            thread_id: origin,
+        let AppEvent::Workflow(WorkflowEvent::ToggleWorkflowPreview {
+            consent,
+            feedback_state,
+            preview,
+            mode: WorkflowPreviewMode::Raw,
         }) = event
         else {
             panic!("Expected source preview");
         };
-        let pending_consent = render_bottom_popup(&app.chat_widget, 100);
+        let source = preview.source.clone();
+        let origin = preview.thread_id.clone();
         let history_count = app.transcript_cells.len();
         app.handle_workflow_event(
             &mut tui,
             &mut app_server,
-            WorkflowEvent::ViewScript {
-                thread_id: ThreadId::new().to_string(),
-                source: source.clone(),
+            WorkflowEvent::ToggleWorkflowPreview {
+                consent,
+                feedback_state,
+                preview,
+                mode: WorkflowPreviewMode::Raw,
             },
         )
         .await?;
-        let wrong_thread_hidden = app.overlay.is_none();
-        app.handle_workflow_event(
-            &mut tui,
-            &mut app_server,
-            WorkflowEvent::ViewScript {
-                thread_id: origin.clone(),
-                source: source.clone(),
-            },
-        )
-        .await?;
-        let rendered = preview_text(&mut app);
-        app.handle_backtrack_overlay_event(
-            &mut tui,
-            &mut app_server,
-            TuiEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
-        )
-        .await?;
-        let returned_to_consent =
-            app.overlay.is_none() && render_bottom_popup(&app.chat_widget, 100) == pending_consent;
-        let ui_only = app.transcript_cells.len() == history_count
-            && events.try_recv().is_err()
-            && !app.backtrack.overlay_preview_active;
-        for _ in 0..if expected == SAVED_SOURCE { 2 } else { 1 } {
-            app.chat_widget
-                .handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-        }
+        let rendered = render_bottom_popup(&app.chat_widget, 100);
+        let ui_only = app.transcript_cells.len() == history_count && events.try_recv().is_err();
         app.chat_widget
             .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         let AppEvent::Workflow(consent) = events.try_recv().expect("pending consent choice") else {
@@ -256,8 +221,6 @@ async fn workflow_consent_preview_shows_selected_source_for_every_launch_form() 
         app_server.shutdown().await?;
         assert_eq!(source, expected);
         assert_eq!(origin, thread_id.to_string());
-        assert!(wrong_thread_hidden);
-        assert!(returned_to_consent);
         assert!(
             ui_only,
             "Source inspection must not enter model history or decide consent"
@@ -288,6 +251,8 @@ async fn workflow_consent_preview_shows_selected_source_for_every_launch_form() 
             assert_eq!(launched["params"]["workflowId"], preview_id);
         }
         if expected == SAVED_SOURCE {
+            let rendered =
+                rendered.replace(root.path().file_name().unwrap().to_str().unwrap(), "[TEMP]");
             insta::assert_snapshot!("workflow_saved_source_preview", rendered);
         }
     }
@@ -346,12 +311,34 @@ async fn workflow_consent_rejects_source_changes_before_launch() -> Result<()> {
         std::fs::write(root.path().join(file), "return 'changed';")?;
         app.chat_widget
             .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        let AppEvent::Workflow(consent) = events.try_recv().expect("consent event") else {
+        let AppEvent::Workflow(WorkflowEvent::Consent {
+            request_id,
+            params,
+            choice,
+            preview,
+            ..
+        }) = events.try_recv().expect("consent event")
+        else {
             panic!("Expected workflow consent");
         };
         let result = app
-            .handle_workflow_event(&mut tui, &mut app_server, consent)
+            .handle_workflow_event(
+                &mut tui,
+                &mut app_server,
+                WorkflowEvent::Consent {
+                    request_id,
+                    params,
+                    choice,
+                    feedback: Some("keep validation strict".into()),
+                    preview,
+                },
+            )
             .await;
+        let AppEvent::DynamicToolCallCompleted { response, .. } =
+            events.try_recv().expect("failed launch completion")
+        else {
+            panic!("Expected failed launch completion");
+        };
         let requests = std::fs::read_to_string(root.path().join("requests.jsonl"))?;
         bridge
             .shutdown()
@@ -359,11 +346,26 @@ async fn workflow_consent_rejects_source_changes_before_launch() -> Result<()> {
             .map_err(|error| color_eyre::eyre::eyre!(error.to_string()))?;
         app_server.shutdown().await?;
         assert!(
-            result
-                .as_ref()
-                .err()
-                .is_some_and(|error| error.to_string().contains("changed")),
-            "Expected changed-source rejection for {file}, got {result:?}"
+            result.is_ok(),
+            "Consent must settle its request: {result:?}"
+        );
+        assert!(!response.success);
+        assert!(response.content_items.iter().any(|item| matches!(
+            item,
+            codex_app_server_protocol::DynamicToolCallOutputContentItem::InputText { text }
+                if text.contains("changed")
+        )));
+        assert_eq!(
+            response
+                .content_items
+                .iter()
+                .filter(|item| matches!(
+                    item,
+                    codex_app_server_protocol::DynamicToolCallOutputContentItem::InputText { text }
+                        if text == "Workflow consent feedback: keep validation strict"
+                ))
+                .count(),
+            1
         );
         let launches: Vec<serde_json::Value> = requests
             .lines()
@@ -423,29 +425,30 @@ async fn saved_slash_preview_keeps_original_thread_and_catalog_identity() -> Res
         app.chat_widget
             .handle_key_event(KeyEvent::new(code, KeyModifiers::NONE));
     }
-    let AppEvent::Workflow(WorkflowEvent::ViewScript { thread_id, source }) =
-        events.try_recv().expect("saved source preview")
+    let AppEvent::Workflow(WorkflowEvent::ToggleWorkflowPreview {
+        consent,
+        feedback_state,
+        preview,
+        mode: WorkflowPreviewMode::Raw,
+    }) = events.try_recv().expect("saved source preview")
     else {
         panic!("Expected saved source preview");
     };
-    assert_eq!(thread_id, origin.to_string());
-    assert_eq!(source, SAVED_SOURCE);
+    assert_eq!(preview.thread_id, origin.to_string());
+    assert_eq!(preview.source, SAVED_SOURCE);
     app.handle_workflow_event(
         &mut tui,
         &mut app_server,
-        WorkflowEvent::ViewScript { thread_id, source },
+        WorkflowEvent::ToggleWorkflowPreview {
+            consent,
+            feedback_state,
+            preview,
+            mode: WorkflowPreviewMode::Raw,
+        },
     )
     .await?;
-    app.handle_backtrack_overlay_event(
-        &mut tui,
-        &mut app_server,
-        TuiEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
-    )
-    .await?;
-    for code in [KeyCode::Up, KeyCode::Up, KeyCode::Enter] {
-        app.chat_widget
-            .handle_key_event(KeyEvent::new(code, KeyModifiers::NONE));
-    }
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     let AppEvent::Workflow(consent @ WorkflowEvent::RunSavedConsent { .. }) =
         events.try_recv().expect("saved consent")
     else {
@@ -487,6 +490,525 @@ async fn saved_slash_preview_keeps_original_thread_and_catalog_identity() -> Res
         1,
         "Approval must not attach a workflow to the newly displayed thread"
     );
+    let popup = popup.replace(root.path().file_name().unwrap().to_str().unwrap(), "[TEMP]");
     insta::assert_snapshot!("workflow_saved_consent", popup);
+    Ok(())
+}
+
+#[tokio::test]
+async fn workflow_consent_toggles_summary_and_raw_without_settling_request() -> Result<()> {
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    while events.try_recv().is_ok() {}
+    let arguments = json!({"script": "export const meta = {name: 'proof', description: 'Proof'};\nreturn 'raw';"});
+    let mut preview = crate::ultracode_source::WorkflowSourcePreview::inline("thread", &arguments)
+        .expect("inline preview");
+    preview.metadata = Some(WorkflowMetadata {
+        name: "proof".into(),
+        title: Some("Proof workflow".into()),
+        description: "Checks the consent summary before launching.".into(),
+        phases: vec![
+            WorkflowPhase::Detailed {
+                title: "Inspect".into(),
+                detail: Some("Read the selected source bytes.".into()),
+            },
+            WorkflowPhase::Name("Report".into()),
+        ],
+    });
+    let params = codex_app_server_protocol::DynamicToolCallParams {
+        thread_id: "thread".into(),
+        turn_id: "turn".into(),
+        call_id: "call".into(),
+        namespace: None,
+        tool: "workflow".into(),
+        arguments,
+    };
+    app.show_workflow_consent(AppServerRequestId::Integer(91), params, preview);
+    insta::assert_snapshot!(
+        "workflow_consent_summary",
+        render_bottom_popup(&app.chat_widget, 100)
+    );
+
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let AppEvent::Workflow(WorkflowEvent::ToggleWorkflowPreview {
+        consent,
+        feedback_state,
+        preview,
+        mode,
+    }) = events.try_recv().expect("raw toggle event")
+    else {
+        panic!("Expected workflow preview toggle");
+    };
+    assert_eq!(mode, WorkflowPreviewMode::Raw);
+    let crate::app_event::WorkflowConsentContext::Dynamic { request_id, params } = &consent else {
+        panic!("Expected dynamic consent context");
+    };
+    assert_eq!(request_id, &AppServerRequestId::Integer(91));
+    assert_eq!(params.thread_id, "thread");
+    assert_eq!(preview.thread_id, "thread");
+    app.show_workflow_consent_context(consent, feedback_state, preview, mode);
+    insta::assert_snapshot!(
+        "workflow_consent_raw",
+        render_bottom_popup(&app.chat_widget, 100)
+    );
+    assert!(events.try_recv().is_err(), "Toggle must not decide consent");
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let AppEvent::Workflow(WorkflowEvent::Consent {
+        request_id,
+        choice: crate::app_event::WorkflowConsentChoice::Run,
+        preview: Some(preview),
+        ..
+    }) = events.try_recv().expect("original consent decision")
+    else {
+        panic!("Expected original workflow consent decision");
+    };
+    assert_eq!(request_id, AppServerRequestId::Integer(91));
+    assert_eq!(preview.thread_id, "thread");
+    assert!(
+        events.try_recv().is_err(),
+        "Toggle must not emit stale cancellation"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn saved_workflow_consent_toggle_retains_name_args_and_remember_identity() -> Result<()> {
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    while events.try_recv().is_ok() {}
+    let arguments = json!({"script": "return 'saved';"});
+    let mut preview = crate::ultracode_source::WorkflowSourcePreview::inline("thread", &arguments)
+        .expect("inline preview");
+    preview.workflow_id = Some("saved-digest".into());
+    preview.metadata = Some(WorkflowMetadata {
+        name: "saved-proof".into(),
+        title: None,
+        description: "Run a saved proof workflow.".into(),
+        phases: Vec::new(),
+    });
+    let digest = preview.digest.clone();
+    app.show_saved_workflow_consent(
+        "thread".into(),
+        "saved-proof".into(),
+        Some("original args".into()),
+        preview,
+    );
+    insta::assert_snapshot!(
+        "workflow_saved_consent_summary",
+        render_bottom_popup(&app.chat_widget, 100)
+    );
+
+    for code in [KeyCode::Down, KeyCode::Down, KeyCode::Enter] {
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(code, KeyModifiers::NONE));
+    }
+    let AppEvent::Workflow(WorkflowEvent::ToggleWorkflowPreview {
+        consent,
+        feedback_state: _,
+        preview,
+        mode: WorkflowPreviewMode::Raw,
+    }) = events.try_recv().expect("saved raw toggle event")
+    else {
+        panic!("Expected saved workflow preview toggle");
+    };
+    let crate::app_event::WorkflowConsentContext::Saved {
+        thread_id,
+        name,
+        args,
+    } = consent
+    else {
+        panic!("Expected saved consent context");
+    };
+    assert_eq!(
+        (thread_id, name, args, preview.digest),
+        (
+            "thread".to_string(),
+            "saved-proof".to_string(),
+            Some("original args".to_string()),
+            digest,
+        )
+    );
+    assert!(events.try_recv().is_err(), "Toggle must not decide consent");
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_workflow_consent_keeps_raw_source_and_editor_available() -> Result<()> {
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    while events.try_recv().is_ok() {}
+    let arguments = json!({"script": "export const meta = ;"});
+    let mut preview = crate::ultracode_source::WorkflowSourcePreview::inline("thread", &arguments)
+        .expect("inline preview");
+    preview.validation_error = Some("Unexpected token ';'".into());
+    let digest = preview.digest.clone();
+    let params = codex_app_server_protocol::DynamicToolCallParams {
+        thread_id: "thread".into(),
+        turn_id: "turn".into(),
+        call_id: "call".into(),
+        namespace: None,
+        tool: "workflow".into(),
+        arguments,
+    };
+    app.show_workflow_consent(AppServerRequestId::Integer(92), params, preview);
+    insta::assert_snapshot!(
+        "workflow_invalid_consent_raw",
+        render_bottom_popup(&app.chat_widget, 100)
+    );
+
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
+    let AppEvent::Workflow(WorkflowEvent::EditWorkflowSource {
+        consent,
+        feedback_state: _,
+        preview,
+    }) = events.try_recv().expect("editor event")
+    else {
+        panic!("Expected workflow editor event");
+    };
+    let crate::app_event::WorkflowConsentContext::Dynamic { request_id, params } = consent else {
+        panic!("Expected dynamic consent context");
+    };
+    assert_eq!(
+        (request_id, params.thread_id, preview.digest),
+        (AppServerRequestId::Integer(92), "thread".into(), digest)
+    );
+    assert!(events.try_recv().is_err(), "Editor must not decide consent");
+    Ok(())
+}
+
+#[tokio::test]
+async fn edited_saved_and_resumed_previews_launch_exact_bound_source() -> Result<()> {
+    for (arguments, edited_source, expected_request) in [
+        (
+            json!({"name":"saved","args":{"ticket":4}}),
+            "export const meta = {name: 'edited-saved', description: 'Edited saved'};\nreturn 'edited saved';",
+            json!({
+                "method": "runSource",
+                "source": "export const meta = {name: 'edited-saved', description: 'Edited saved'};\nreturn 'edited saved';",
+                "args": {"ticket":4},
+                "runId": null,
+                "workflowId": null,
+            }),
+        ),
+        (
+            json!({"resumeFromRunId":"previous","args":["resume",2]}),
+            "export const meta = {name: 'edited-resume', description: 'Edited resume'};\nreturn 'edited resume';",
+            json!({
+                "method": "resumeRun",
+                "source": "export const meta = {name: 'edited-resume', description: 'Edited resume'};\nreturn 'edited resume';",
+                "args": ["resume",2],
+                "runId": "previous",
+                "workflowId": null,
+            }),
+        ),
+    ] {
+        let (mut app, _events, _ops) = make_test_app_with_channels().await;
+        let root = tempdir()?;
+        app.config.cwd = root.path().canonicalize()?.abs();
+        app.config.codex_home = root.path().join("home").abs();
+        let bridge = preview_bridge(root.path()).await?;
+        let mut app_server = preview_app_server(&app.config, root.path()).await?;
+        let started = app_server.start_thread(&app.config).await?;
+        let thread_id = started.session.thread_id;
+        app.chat_widget.handle_thread_session(started.session);
+        app.workflow_sessions.insert(
+            thread_id.to_string(),
+            crate::app::workflow::WorkflowSession {
+                bridge: bridge.clone(),
+                pending_workers: HashMap::new(),
+                consent: crate::workflow_consent::WorkflowConsentStore::load(root.path())?,
+                reported_runs: HashSet::new(),
+                active_runs: false,
+            },
+        );
+
+        let original = app
+            .prepare_workflow_preview(&mut app_server, &thread_id.to_string(), &arguments)
+            .await?;
+        let (edited_arguments, edited_preview) = original
+            .with_edited_source(&arguments, edited_source.to_string())
+            .map_err(|error| color_eyre::eyre::eyre!(error.to_string()))?;
+        assert_eq!(edited_preview.workflow_id, None);
+        let authority = app_server
+            .workflow_authority_capture(codex_app_server_protocol::WorkflowAuthorityCaptureParams {
+                parent_thread_id: thread_id.to_string(),
+                allow_isolated_workspaces: true,
+            })
+            .await?;
+        let launch = crate::ultracode_launch::launch_with_preview(
+            &app_server.request_handle(),
+            &thread_id.to_string(),
+            &authority,
+            &bridge,
+            &edited_arguments,
+            Some(&edited_preview),
+        )
+        .await?;
+        assert_eq!(launch.result?["runId"], "launched");
+
+        let requests: Vec<serde_json::Value> =
+            std::fs::read_to_string(root.path().join("requests.jsonl"))?
+                .lines()
+                .map(serde_json::from_str)
+                .collect::<std::result::Result<_, _>>()?;
+        let request = requests
+            .iter()
+            .rev()
+            .find(|request| matches!(request["method"].as_str(), Some("runSource" | "resumeRun")))
+            .expect("edited workflow launch request");
+        assert_eq!(
+            json!({
+                "method": request["method"],
+                "source": request["params"]["source"],
+                "args": request["params"]["args"],
+                "runId": request["params"]["runId"],
+                "workflowId": request["params"]["workflowId"],
+            }),
+            expected_request,
+        );
+        assert_eq!(request["params"]["source"], edited_preview.source);
+
+        bridge
+            .shutdown()
+            .await
+            .map_err(|error| color_eyre::eyre::eyre!(error.to_string()))?;
+        app_server.shutdown().await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn unchanged_edited_saved_source_retries_validation_without_launching() -> Result<()> {
+    let (mut app, _events, _ops) = make_test_app_with_channels().await;
+    let root = tempdir()?;
+    app.config.cwd = root.path().canonicalize()?.abs();
+    app.config.codex_home = root.path().join("home").abs();
+    let bridge = preview_bridge(root.path()).await?;
+    let mut app_server = preview_app_server(&app.config, root.path()).await?;
+    let started = app_server.start_thread(&app.config).await?;
+    let thread_id = started.session.thread_id;
+    app.chat_widget.handle_thread_session(started.session);
+    app.workflow_sessions.insert(
+        thread_id.to_string(),
+        crate::app::workflow::WorkflowSession {
+            bridge: bridge.clone(),
+            pending_workers: HashMap::new(),
+            consent: crate::workflow_consent::WorkflowConsentStore::load(root.path())?,
+            reported_runs: HashSet::new(),
+            active_runs: false,
+        },
+    );
+
+    let source = "export const meta = {name: 'edited-saved', description: 'Edited saved'};\nreturn 'edited saved';";
+    let arguments = json!({"script": source, "args": "original args"});
+    let mut preview =
+        crate::ultracode_source::WorkflowSourcePreview::inline(&thread_id.to_string(), &arguments)
+            .expect("previously edited saved preview");
+    preview.validation_error = Some("temporary validation failure".into());
+    let digest = preview.digest.clone();
+    let consent = crate::app_event::WorkflowConsentContext::Saved {
+        thread_id: thread_id.to_string(),
+        name: "saved".into(),
+        args: Some("original args".into()),
+    };
+
+    let (consent, preview, mode) = app
+        .apply_workflow_editor_source(&mut app_server, consent, preview, source.to_string())
+        .await?;
+    let crate::app_event::WorkflowConsentContext::Saved {
+        thread_id: retained_thread,
+        name,
+        args,
+    } = consent
+    else {
+        panic!("Expected saved consent context");
+    };
+    assert_eq!(
+        (
+            retained_thread,
+            name,
+            args,
+            preview.source.clone(),
+            preview.digest.clone(),
+            preview.workflow_id.clone(),
+            preview.validation_error.clone(),
+            mode,
+        ),
+        (
+            thread_id.to_string(),
+            "saved".to_string(),
+            Some("original args".to_string()),
+            source.to_string(),
+            digest,
+            None,
+            None,
+            WorkflowPreviewMode::Summary,
+        )
+    );
+    assert!(
+        preview.metadata.is_some(),
+        "Healthy validation restores summary metadata"
+    );
+
+    let requests: Vec<serde_json::Value> =
+        std::fs::read_to_string(root.path().join("requests.jsonl"))?
+            .lines()
+            .map(serde_json::from_str)
+            .collect::<std::result::Result<_, _>>()?;
+    assert!(requests.iter().any(|request| {
+        request["method"] == "validateSource" && request["params"]["source"] == source
+    }));
+    assert!(requests.iter().all(|request| {
+        !matches!(
+            request["method"].as_str(),
+            Some("readSavedSource" | "runSource" | "runSaved" | "resumeRun")
+        )
+    }));
+
+    bridge
+        .shutdown()
+        .await
+        .map_err(|error| color_eyre::eyre::eyre!(error.to_string()))?;
+    app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn workflow_consent_collects_inline_accept_and_reject_feedback() -> Result<()> {
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    while events.try_recv().is_ok() {}
+    let arguments = json!({"script": "return 'feedback';"});
+    let mut preview = crate::ultracode_source::WorkflowSourcePreview::inline("thread", &arguments)
+        .expect("inline preview");
+    preview.metadata = Some(WorkflowMetadata {
+        name: "feedback".into(),
+        title: Some("Feedback workflow".into()),
+        description: "Collect inline consent feedback.".into(),
+        phases: vec![WorkflowPhase::Name("Run".into())],
+    });
+    let params = codex_app_server_protocol::DynamicToolCallParams {
+        thread_id: "thread".into(),
+        turn_id: "turn".into(),
+        call_id: "call".into(),
+        namespace: None,
+        tool: "workflow".into(),
+        arguments: arguments.clone(),
+    };
+
+    app.show_workflow_consent(AppServerRequestId::Integer(101), params, preview);
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    insta::assert_snapshot!(
+        "workflow_consent_accept_feedback",
+        render_bottom_popup(&app.chat_widget, 100)
+    );
+    for c in "  continue with report  ".chars() {
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let AppEvent::Workflow(WorkflowEvent::ToggleWorkflowPreview {
+        consent,
+        feedback_state,
+        preview,
+        mode,
+    }) = events.try_recv().expect("feedback toggle event")
+    else {
+        panic!("Expected workflow feedback toggle");
+    };
+    assert_eq!(mode, WorkflowPreviewMode::Raw);
+    app.show_workflow_consent_context(consent, feedback_state, preview.clone(), mode);
+    insta::assert_snapshot!(
+        "workflow_consent_accept_feedback_after_toggle",
+        render_bottom_popup(&app.chat_widget, 100)
+    );
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let AppEvent::Workflow(WorkflowEvent::Consent {
+        choice: crate::app_event::WorkflowConsentChoice::Run,
+        feedback: Some(feedback),
+        params,
+        ..
+    }) = events.try_recv().expect("accept feedback event")
+    else {
+        panic!("Expected workflow accept feedback");
+    };
+    assert_eq!(feedback, "continue with report");
+    assert_eq!(params.arguments, arguments);
+
+    let params = codex_app_server_protocol::DynamicToolCallParams {
+        thread_id: "thread".into(),
+        turn_id: "turn".into(),
+        call_id: "call-2".into(),
+        namespace: None,
+        tool: "workflow".into(),
+        arguments: arguments.clone(),
+    };
+    app.show_workflow_consent(AppServerRequestId::Integer(102), params, preview);
+    for code in [KeyCode::Down, KeyCode::Down, KeyCode::Tab] {
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(code, KeyModifiers::NONE));
+    }
+    insta::assert_snapshot!(
+        "workflow_consent_reject_feedback",
+        render_bottom_popup(&app.chat_widget, 100)
+    );
+    for c in "  use fewer agents  ".chars() {
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let AppEvent::Workflow(WorkflowEvent::Consent {
+        choice: crate::app_event::WorkflowConsentChoice::Cancel,
+        feedback: Some(feedback),
+        params,
+        ..
+    }) = events.try_recv().expect("reject feedback event")
+    else {
+        panic!("Expected workflow reject feedback");
+    };
+    assert_eq!(feedback, "use fewer agents");
+    assert_eq!(params.arguments, arguments);
+    Ok(())
+}
+
+#[tokio::test]
+async fn workflow_consent_carries_feedback_into_editor_replacement() -> Result<()> {
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    while events.try_recv().is_ok() {}
+    let arguments = json!({"script": "return 'edit feedback';"});
+    let preview = crate::ultracode_source::WorkflowSourcePreview::inline("thread", &arguments)
+        .expect("inline preview");
+    let params = codex_app_server_protocol::DynamicToolCallParams {
+        thread_id: "thread".into(),
+        turn_id: "turn".into(),
+        call_id: "call".into(),
+        namespace: None,
+        tool: "workflow".into(),
+        arguments,
+    };
+    app.show_workflow_consent(AppServerRequestId::Integer(103), params, preview);
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    for c in "keep this".chars() {
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
+    let AppEvent::Workflow(WorkflowEvent::EditWorkflowSource { feedback_state, .. }) =
+        events.try_recv().expect("editor replacement")
+    else {
+        panic!("Expected workflow editor replacement");
+    };
+    let feedback = feedback_state.snapshot();
+    assert_eq!(feedback.accept, "keep this");
+    assert!(feedback.accept_expanded);
     Ok(())
 }

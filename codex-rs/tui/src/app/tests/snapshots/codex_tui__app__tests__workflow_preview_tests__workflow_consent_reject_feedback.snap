@@ -1,0 +1,20 @@
+---
+source: tui/src/app/tests/workflow_preview_tests.rs
+expression: "render_bottom_popup(&app.chat_widget, 100)"
+---
+  Run a dynamic workflow?
+
+  Workflow Feedback workflow
+  Collect inline consent feedback.
+
+  Phases
+  1. Run
+
+  You can stop a running workflow at any time with /workflows, or disable dynamic workflows in
+  /config.
+
+  1. Yes, run it
+  2. View raw script
+› 3. No               tell Codex what to do differently
+
+  ctrl + g edit in $EDITOR

@@ -1,19 +1,17 @@
 ---
 source: tui/src/app/tests/workflow_preview_tests.rs
-expression: rendered
+expression: "render_bottom_popup(&app.chat_widget, 100)"
 ---
   Run a dynamic workflow?
 
-  export const meta = {name: 'saved'};
-  return 'saved source';
+  export const meta = {name: 'proof', description: 'Proof'};
+  return 'raw';
 
   You can stop a running workflow at any time with /workflows, or disable dynamic workflows in
   /config.
 
 › 1. Yes, run it
-  2. Yes, and don't ask again for /saved in /private/var/folders/s1/
-     l1n0ht5d5j5__hqxv0d_6q2w0000gn/T/[TEMP]
-  3. View workflow summary
-  4. No
+  2. View workflow summary
+  3. No
 
   ctrl + g edit in $EDITOR
