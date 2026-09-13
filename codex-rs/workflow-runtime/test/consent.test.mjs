@@ -77,6 +77,13 @@ test('args presentation uses compact literal serialization and multiline gutter 
     {text:'visible�invisible',needsGutter:false,withheld:false});
 });
 
+test('args gutter hint uses terminal display width',()=>{
+  assert.equal(present('',{args:'界'.repeat(40)}).args.needsGutter,false);
+  assert.equal(present('',{args:'界'.repeat(41)}).args.needsGutter,true);
+  assert.equal(present('',{args:'a\u0301'.repeat(80)}).args.needsGutter,false);
+  assert.equal(present('',{args:'a\u0301'.repeat(81)}).args.needsGutter,true);
+});
+
 test('args presentation withholds unsafe or over-budget values',()=>{
   const marker='(value cannot be shown in full — approval withheld; one-time options only)';
   const withheld={text:marker,needsGutter:false,withheld:true};
@@ -102,6 +109,16 @@ test('source presentation preserves safe bytes and withholds unsafe or oversized
     text:'(script of 200,001 characters cannot be shown in full — approval is unavailable; deny or send feedback)',
     withheld:true,originalLength:200001,
   });
+});
+
+test('presentation withholds runs of more than eight zero-width characters',()=>{
+  const safe=`a${'\u0301'.repeat(8)}b`;
+  const unsafe=`a${'\u0301'.repeat(9)}b`;
+  assert.equal(present('',{args:safe}).args.withheld,false);
+  assert.equal(present('',{args:unsafe}).args.withheld,true);
+  assert.equal(present(safe).source.withheld,false);
+  assert.equal(present(unsafe).source.withheld,true);
+  assert.equal(present(`a${'\u0301'.repeat(8)}\n${'\u0301'.repeat(8)}b`).source.withheld,false);
 });
 
 test('presentation rejects malformed direct inputs',()=>{
