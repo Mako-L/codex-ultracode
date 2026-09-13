@@ -1454,7 +1454,7 @@ mod tests {
                 std::fs::create_dir_all(&directory).unwrap();
                 std::fs::write(
                     directory.join(format!("{}.json", case["capture"].as_str().unwrap())),
-                    serde_json::to_vec(&json!({"columns":160,"rows":48,"case":case,"stylesEnabled":v.styles_enabled,"cells":cells}))
+                    serde_json::to_vec(&json!({"columns":160,"rows":48,"case":case,"stylesEnabled":v.styles_enabled,"snapshot":v.snapshot,"cells":cells}))
                         .unwrap(),
                 )
                 .unwrap();
