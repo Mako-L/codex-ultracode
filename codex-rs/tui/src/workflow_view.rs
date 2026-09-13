@@ -676,6 +676,41 @@ fn detail_rows(w: &Value, size: usize, expanded: bool) -> Vec<String> {
             format!(" · attempt {attempt}{reason}")
         })
         .unwrap_or_default();
+    let mut metadata = Vec::new();
+    let explicit_role = w
+        .pointer("/options/agentType")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some();
+    if let Some(role) = w["agentType"]
+        .as_str()
+        .map(clean)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .filter(|value| value != "general-purpose" || explicit_role)
+    {
+        metadata.push(role);
+    }
+    let isolation = w["isolation"]
+        .as_str()
+        .map(clean)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            w.pointer("/workspace/isolated")
+                .and_then(Value::as_bool)
+                .filter(|isolated| *isolated)
+                .map(|_| "worktree".to_string())
+        });
+    if let Some(isolation) = isolation {
+        metadata.push(isolation);
+    }
+    let metadata = if metadata.is_empty() {
+        String::new()
+    } else {
+        format!(" · {}", metadata.join(" · "))
+    };
     let tools = w["toolCalls"]
         .as_u64()
         .filter(|count| *count > 0)
@@ -683,7 +718,7 @@ fn detail_rows(w: &Value, size: usize, expanded: bool) -> Vec<String> {
         .unwrap_or_default();
     let mut out = vec![
         format!(
-            "{} {heading} · {}{attempt}",
+            "{} {heading} · {}{metadata}{attempt}",
             mark(Some(status)),
             clean(w["model"].as_str().unwrap_or_default())
         ),
@@ -1188,6 +1223,10 @@ fn elapsed_at(v: &Value, now: chrono::DateTime<chrono::Utc>) -> String {
 #[cfg(test)]
 #[path = "workflow_view_restart_tests.rs"]
 mod restart_tests;
+
+#[cfg(test)]
+#[path = "workflow_view_metadata_tests.rs"]
+mod metadata_tests;
 
 #[cfg(test)]
 mod tests {
