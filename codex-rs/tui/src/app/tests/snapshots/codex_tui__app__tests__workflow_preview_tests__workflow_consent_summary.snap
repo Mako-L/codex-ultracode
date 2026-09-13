@@ -1,23 +1,22 @@
 ---
 source: tui/src/app/tests/workflow_preview_tests.rs
-expression: popup
+expression: "render_bottom_popup(&app.chat_widget, 100)"
 ---
   Run a dynamic workflow?
 
-  Workflow Preview workflow
-  Preview the selected workflow source.
+  Workflow Proof workflow
+  Checks the consent summary before launching.
 
   Phases
   1. Inspect
-     Read the selected bytes.
+     Read the selected source bytes.
+  2. Report
 
   You can stop a running workflow at any time with /workflows, or disable dynamic workflows in
   /config.
 
 › 1. Yes, run it
-  2. Yes, and don't ask again for /saved in /private/var/folders/s1/
-     l1n0ht5d5j5__hqxv0d_6q2w0000gn/T/[TEMP]
-  3. View raw script
-  4. No
+  2. View raw script
+  3. No
 
   ctrl + g edit in $EDITOR

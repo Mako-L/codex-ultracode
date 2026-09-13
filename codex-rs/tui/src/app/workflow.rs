@@ -24,6 +24,19 @@ pub(crate) struct PendingWorker {
     started: bool,
 }
 
+pub(super) fn append_workflow_feedback(
+    response: &mut codex_app_server_protocol::DynamicToolCallResponse,
+    feedback: Option<String>,
+) {
+    if let Some(feedback) = feedback {
+        response.content_items.push(
+            codex_app_server_protocol::DynamicToolCallOutputContentItem::InputText {
+                text: format!("Workflow consent feedback: {feedback}"),
+            },
+        );
+    }
+}
+
 fn terminal_output(
     status: &str,
     structured: bool,
@@ -337,6 +350,7 @@ impl App {
                             name,
                             args,
                             choice: WorkflowConsentChoice::Run,
+                            feedback: None,
                             preview: None,
                         }));
                 } else {
@@ -352,8 +366,26 @@ impl App {
                 name,
                 args,
                 choice,
+                feedback,
                 preview,
             } => {
+                if let Some(feedback) = feedback {
+                    let thread_id = ThreadId::from_string(&thread_id)?;
+                    app_server
+                        .thread_inject_items(
+                            thread_id,
+                            vec![codex_protocol::models::ResponseItem::Message {
+                                id: None,
+                                role: "user".to_string(),
+                                content: vec![codex_protocol::models::ContentItem::InputText {
+                                    text: feedback,
+                                }],
+                                phase: None,
+                                internal_chat_message_metadata_passthrough: None,
+                            }],
+                        )
+                        .await?;
+                }
                 if matches!(choice, WorkflowConsentChoice::Cancel) {
                     return Ok(());
                 }
@@ -373,6 +405,18 @@ impl App {
                 let mut arguments = serde_json::json!({"name":name});
                 if let Some(args) = args {
                     arguments["args"] = serde_json::Value::String(args);
+                }
+                if let Some(preview) = &preview
+                    && preview.workflow_id.is_none()
+                {
+                    // An editor result is an inline launch, not the saved file's old bytes.
+                    arguments.as_object_mut().unwrap().remove("name");
+                    arguments["script"] = serde_json::Value::String(preview.source.clone());
+                    if matches!(choice, WorkflowConsentChoice::Remember) {
+                        return Err(color_eyre::eyre::eyre!(
+                            "Edited workflows cannot inherit saved workflow permissions"
+                        ));
+                    }
                 }
                 let launch = crate::ultracode_launch::launch_with_preview(
                     &app_server.request_handle(),
@@ -400,7 +444,11 @@ impl App {
                     .is_some_and(|current| current.to_string() == key)
                 {
                     self.chat_widget.add_info_message(
-                        format!("Workflow /{name} launched"),
+                        if arguments.get("name").is_some() {
+                            format!("Workflow /{name} launched")
+                        } else {
+                            "Edited workflow launched".to_string()
+                        },
                         result
                             .get("scriptPath")
                             .and_then(serde_json::Value::as_str)
@@ -482,6 +530,7 @@ impl App {
                             request_id,
                             params,
                             choice: WorkflowConsentChoice::Run,
+                            feedback: None,
                             preview: None,
                         }));
                 } else {
@@ -512,74 +561,97 @@ impl App {
                     tui.frame_requester().schedule_frame();
                 }
             }
+            WorkflowEvent::ToggleWorkflowPreview {
+                consent,
+                feedback_state,
+                preview,
+                mode,
+            } => self.show_workflow_consent_context(consent, feedback_state, preview, mode),
+            WorkflowEvent::EditWorkflowSource {
+                consent,
+                feedback_state,
+                preview,
+            } => {
+                self.edit_workflow_source(tui, app_server, consent, feedback_state, preview)
+                    .await;
+            }
             WorkflowEvent::Consent {
                 request_id,
                 params,
                 choice,
+                feedback,
                 preview,
             } => {
                 if matches!(choice, WorkflowConsentChoice::Cancel) {
+                    let mut response =
+                        crate::dynamic_tools::failure_response("Workflow launch cancelled");
+                    append_workflow_feedback(&mut response, feedback);
                     self.app_event_tx.send(AppEvent::DynamicToolCallCompleted {
                         request_id,
-                        response: crate::dynamic_tools::failure_response(
-                            "Workflow launch cancelled",
-                        ),
+                        response,
                     });
                     return Ok(());
                 }
-                let parent_thread_id = params.thread_id.clone();
-                let session_key = parent_thread_id.to_string();
-                let authority = app_server
-                    .workflow_authority_capture(
-                        codex_app_server_protocol::WorkflowAuthorityCaptureParams {
-                            parent_thread_id,
-                            allow_isolated_workspaces: true,
-                        },
+                let response: Result<codex_app_server_protocol::DynamicToolCallResponse> = async {
+                    let parent_thread_id = params.thread_id.clone();
+                    let session_key = parent_thread_id.to_string();
+                    let authority = app_server
+                        .workflow_authority_capture(
+                            codex_app_server_protocol::WorkflowAuthorityCaptureParams {
+                                parent_thread_id,
+                                allow_isolated_workspaces: true,
+                            },
+                        )
+                        .await?;
+                    self.ensure_workflow_session(&authority, &session_key, app_server)
+                        .await?;
+                    let bridge = self
+                        .workflow_sessions
+                        .get(&session_key)
+                        .unwrap()
+                        .bridge
+                        .clone();
+                    let launch = crate::ultracode_launch::launch_with_preview(
+                        &app_server.request_handle(),
+                        &session_key,
+                        &authority,
+                        &bridge,
+                        &params.arguments,
+                        preview.as_ref(),
                     )
                     .await?;
-                self.ensure_workflow_session(&authority, &session_key, app_server)
-                    .await?;
-                let bridge = self
-                    .workflow_sessions
-                    .get(&session_key)
-                    .unwrap()
-                    .bridge
-                    .clone();
-                let launch = crate::ultracode_launch::launch_with_preview(
-                    &app_server.request_handle(),
-                    &session_key,
-                    &authority,
-                    &bridge,
-                    &params.arguments,
-                    preview.as_ref(),
-                )
-                .await?;
-                let source_digest = launch.source_digest;
-                if self.config.approvals_reviewer == ApprovalsReviewer::AutoReview
-                    && !self.config.ultracode
-                {
-                    self.workflow_sessions
-                        .get_mut(&session_key)
-                        .unwrap()
-                        .consent
-                        .remember_auto_first_launch()?;
+                    let source_digest = launch.source_digest;
+                    if self.config.approvals_reviewer == ApprovalsReviewer::AutoReview
+                        && !self.config.ultracode
+                    {
+                        self.workflow_sessions
+                            .get_mut(&session_key)
+                            .unwrap()
+                            .consent
+                            .remember_auto_first_launch()?;
+                    }
+                    if matches!(choice, WorkflowConsentChoice::Remember)
+                        && let (Some(name), Some(digest)) = (
+                            params
+                                .arguments
+                                .get("name")
+                                .and_then(serde_json::Value::as_str),
+                            source_digest.as_deref(),
+                        )
+                    {
+                        self.workflow_sessions
+                            .get_mut(&session_key)
+                            .unwrap()
+                            .consent
+                            .remember_named(Path::new(&authority.cwd), name, digest)?;
+                    }
+                    Ok(crate::ultracode_launch::response(launch.result))
                 }
-                if matches!(choice, WorkflowConsentChoice::Remember)
-                    && let (Some(name), Some(digest)) = (
-                        params
-                            .arguments
-                            .get("name")
-                            .and_then(serde_json::Value::as_str),
-                        source_digest.as_deref(),
-                    )
-                {
-                    self.workflow_sessions
-                        .get_mut(&session_key)
-                        .unwrap()
-                        .consent
-                        .remember_named(Path::new(&authority.cwd), name, digest)?;
-                }
-                let response = crate::ultracode_launch::response(launch.result);
+                .await;
+                let mut response = response.unwrap_or_else(|error| {
+                    crate::dynamic_tools::failure_response(error.to_string())
+                });
+                append_workflow_feedback(&mut response, feedback);
                 self.app_event_tx.send(AppEvent::DynamicToolCallCompleted {
                     request_id,
                     response,

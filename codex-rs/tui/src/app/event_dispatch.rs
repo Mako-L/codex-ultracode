@@ -63,9 +63,36 @@ impl App {
 
         match event {
             AppEvent::Workflow(event) => {
-                let request_id=match &event { crate::app_event::WorkflowEvent::ToolCall{request_id,..}|crate::app_event::WorkflowEvent::Consent{request_id,..}=>Some(request_id.clone()),_=>None };
+                let (request_id, workflow_feedback) = match &event {
+                    crate::app_event::WorkflowEvent::ToolCall { request_id, .. } => {
+                        (Some(request_id.clone()), None)
+                    }
+                    crate::app_event::WorkflowEvent::Consent {
+                        request_id,
+                        feedback,
+                        ..
+                    } => (Some(request_id.clone()), feedback.clone()),
+                    _ => (None, None),
+                };
                 let catalog=matches!(&event,crate::app_event::WorkflowEvent::LoadCatalog{..});
-                if let Err(error)=Box::pin(self.handle_workflow_event(tui,app_server,event)).await { if let Some(request_id)=request_id { self.app_event_tx.send(AppEvent::DynamicToolCallCompleted { request_id,response:crate::dynamic_tools::failure_response(error.to_string()) }); } else if catalog { tracing::warn!(%error,"unable to load workflow catalog"); } else { return Err(error); } }
+                if let Err(error) =
+                    Box::pin(self.handle_workflow_event(tui, app_server, event)).await
+                {
+                    if let Some(request_id) = request_id {
+                        let mut response =
+                            crate::dynamic_tools::failure_response(error.to_string());
+                        crate::app::workflow::append_workflow_feedback(
+                            &mut response,
+                            workflow_feedback,
+                        );
+                        self.app_event_tx
+                            .send(AppEvent::DynamicToolCallCompleted { request_id, response });
+                    } else if catalog {
+                        tracing::warn!(%error, "unable to load workflow catalog");
+                    } else {
+                        return Err(error);
+                    }
+                }
             }
             AppEvent::SkillsListLoaded { ref cwd, .. }
             | AppEvent::PluginMentionsLoaded { ref cwd, .. }

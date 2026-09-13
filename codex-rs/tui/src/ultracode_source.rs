@@ -6,12 +6,17 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::WorkflowAuthorityCaptureResponse;
 use codex_app_server_protocol::WorkflowScriptReadParams;
 use codex_app_server_protocol::WorkflowScriptReadResponse;
+use serde::Deserialize;
 use serde_json::Value;
 use serde_json::json;
 use sha2::Digest;
 use sha2::Sha256;
 use std::time::Duration;
 use uuid::Uuid;
+
+#[cfg(test)]
+#[path = "ultracode_source_tests.rs"]
+mod tests;
 
 /// Source bytes and identity selected for one originating thread's consent.
 /// This is local UI state, never a dynamic-tool argument or model-history item.
@@ -21,9 +26,31 @@ pub(crate) struct WorkflowSourcePreview {
     pub(crate) source: String,
     pub(crate) digest: String,
     pub(crate) workflow_id: Option<String>,
+    pub(crate) metadata: Option<WorkflowMetadata>,
+    pub(crate) validation_error: Option<String>,
     resolved_path: Option<String>,
     resume_run_id: Option<String>,
     saved_name: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub(crate) struct WorkflowMetadata {
+    pub(crate) name: String,
+    #[serde(default)]
+    pub(crate) title: Option<String>,
+    pub(crate) description: String,
+    #[serde(default)]
+    pub(crate) phases: Vec<WorkflowPhase>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub(crate) enum WorkflowPhase {
+    Name(String),
+    Detailed {
+        title: String,
+        detail: Option<String>,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -53,6 +80,29 @@ pub(crate) fn source_location(arguments: &Value) -> Result<SourceLocation<'_>, B
 }
 
 impl WorkflowSourcePreview {
+    /// Bind an editor result to the bytes that the next consent decision approves.
+    /// Edited saved/file workflows become inline launches; they must never resolve
+    /// the old location again or inherit its remembered permission identity.
+    pub(crate) fn with_edited_source(
+        &self,
+        arguments: &Value,
+        source: String,
+    ) -> Result<(Value, Self), BridgeError> {
+        if source == self.source {
+            return Ok((arguments.clone(), self.clone()));
+        }
+        let mut arguments = arguments.clone();
+        let object = arguments
+            .as_object_mut()
+            .ok_or_else(|| BridgeError::host("Workflow arguments must be an object"))?;
+        object.remove("name");
+        object.remove("scriptPath");
+        object.insert("script".into(), Value::String(source));
+        let preview = Self::inline(&self.thread_id, &arguments)
+            .ok_or_else(|| BridgeError::host("Edited workflow source is unavailable"))?;
+        Ok((arguments, preview))
+    }
+
     pub(crate) fn inline(thread_id: &str, arguments: &Value) -> Option<Self> {
         let SourceLocation::Inline(source) = source_location(arguments).ok()? else {
             return None;
@@ -62,6 +112,8 @@ impl WorkflowSourcePreview {
             source: source.to_owned(),
             digest: format!("{:x}", Sha256::digest(source.as_bytes())),
             workflow_id: None,
+            metadata: None,
+            validation_error: None,
             resolved_path: None,
             resume_run_id: arguments
                 .get("resumeFromRunId")
@@ -188,6 +240,8 @@ pub(crate) async fn read_preview(
             source,
             digest,
             workflow_id,
+            metadata: None,
+            validation_error: None,
             resolved_path,
             resume_run_id: arguments
                 .get("resumeFromRunId")

@@ -1,0 +1,16 @@
+---
+source: tui/src/app/tests/workflow_preview_tests.rs
+expression: "render_bottom_popup(&app.chat_widget, 100)"
+---
+  Run a dynamic workflow?
+
+  return 'feedback';
+
+  You can stop a running workflow at any time with /workflows, or disable dynamic workflows in
+  /config.
+
+› 1. Yes, run it              continue with report
+  2. View workflow summary
+  3. No
+
+  ctrl + g edit in $EDITOR
