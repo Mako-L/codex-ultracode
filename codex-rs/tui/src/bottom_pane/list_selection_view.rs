@@ -9,8 +9,12 @@ use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
+use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
+use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::Widget;
+use std::cell::Cell;
+use std::cell::RefCell;
 
 use super::selection_popup_common::render_menu_surface;
 use super::selection_popup_common::wrap_styled_line;
@@ -38,6 +42,8 @@ pub(crate) use super::selection_row_layout::SelectionDescriptionLayout;
 use super::selection_tabs::SelectionTab;
 use super::selection_tabs::render_tab_bar;
 use super::selection_tabs::tab_bar_height;
+use super::textarea::TextArea;
+use super::textarea::TextAreaState;
 use unicode_width::UnicodeWidthStr;
 
 /// Minimum list width (in content columns) required before the side-by-side
@@ -106,7 +112,59 @@ pub(crate) enum SelectionRowDisplay {
 
 /// One selectable item in the generic selection list.
 pub(crate) type SelectionAction = Box<dyn Fn(&AppEventSender) + Send + Sync>;
+pub(crate) type SelectionFeedbackAction =
+    Box<dyn Fn(Option<String>, &AppEventSender) + Send + Sync>;
+pub(crate) type SelectionFeedbackChanged = Box<dyn Fn(&str) + Send + Sync>;
 pub(crate) type SelectionToggleAction = dyn Fn(bool, &AppEventSender) + Send + Sync;
+
+pub(crate) struct SelectionFeedback {
+    pub placeholder: &'static str,
+    pub action: SelectionFeedbackAction,
+    pub on_change: Option<SelectionFeedbackChanged>,
+    pub on_expanded_change: Option<Box<dyn Fn(bool) + Send + Sync>>,
+    textarea: TextArea,
+    textarea_state: RefCell<TextAreaState>,
+    expanded: bool,
+}
+
+impl SelectionFeedback {
+    pub(crate) fn new(
+        placeholder: &'static str,
+        initial_text: String,
+        initially_expanded: bool,
+        action: SelectionFeedbackAction,
+    ) -> Self {
+        let mut textarea = TextArea::new();
+        textarea.set_text_clearing_elements(&initial_text);
+        textarea.set_cursor(initial_text.len());
+        Self {
+            placeholder,
+            action,
+            on_change: None,
+            on_expanded_change: None,
+            textarea,
+            textarea_state: RefCell::new(TextAreaState::default()),
+            expanded: initially_expanded,
+        }
+    }
+
+    fn text(&self) -> &str {
+        self.textarea.text()
+    }
+
+    fn set_expanded(&mut self, expanded: bool) {
+        self.expanded = expanded;
+        if let Some(on_expanded_change) = &self.on_expanded_change {
+            on_expanded_change(expanded);
+        }
+    }
+
+    fn notify_changed(&self) {
+        if let Some(on_change) = &self.on_change {
+            on_change(self.text());
+        }
+    }
+}
 
 pub(crate) struct SelectionToggle {
     pub is_on: bool,
@@ -142,6 +200,7 @@ pub(crate) struct SelectionItem {
     pub is_default: bool,
     pub is_disabled: bool,
     pub actions: Vec<SelectionAction>,
+    pub feedback: Option<SelectionFeedback>,
     pub dismiss_on_select: bool,
     /// Require an explicit accept key after a direct shortcut highlights this sensitive item.
     pub require_explicit_confirmation: bool,
@@ -166,6 +225,8 @@ pub(crate) struct SelectionItem {
 /// `description_layout` optionally moves descriptions below labels when their
 /// column would become too narrow.
 pub(crate) struct SelectionViewParams {
+    /// Footer actions that replace this picker without accepting its selected row.
+    pub additional_shortcuts: Vec<(ShortcutHint, SelectionAction)>,
     pub view_id: Option<&'static str>,
     pub title: Option<String>,
     pub subtitle: Option<String>,
@@ -218,6 +279,7 @@ pub(crate) struct SelectionViewParams {
 impl Default for SelectionViewParams {
     fn default() -> Self {
         Self {
+            additional_shortcuts: Vec::new(),
             view_id: None,
             title: None,
             subtitle: None,
@@ -253,6 +315,7 @@ impl Default for SelectionViewParams {
 /// visible rows and source items and for preserving selection while filters
 /// change.
 pub(crate) struct ListSelectionView {
+    additional_shortcuts: Vec<(ShortcutHint, SelectionAction)>,
     view_id: Option<&'static str>,
     footer_note: Option<Line<'static>>,
     footer_hint: Option<Line<'static>>,
@@ -274,6 +337,7 @@ pub(crate) struct ListSelectionView {
     filtered_indices: Vec<usize>,
     last_selected_actual_idx: Option<usize>,
     rendered_item_count: std::cell::Cell<usize>,
+    feedback_area: Cell<Option<Rect>>,
     header: Box<dyn Renderable>,
     initial_selected_idx: Option<usize>,
     side_content: Box<dyn Renderable>,
@@ -313,6 +377,66 @@ fn selection_item_toggle_prefix(item: &SelectionItem) -> Option<&'static str> {
 }
 
 impl ListSelectionView {
+    fn selected_feedback_is_expanded(&self) -> bool {
+        self.selected_actual_idx()
+            .and_then(|actual_idx| self.active_items().get(actual_idx))
+            .and_then(|item| item.feedback.as_ref())
+            .is_some_and(|feedback| feedback.expanded)
+    }
+
+    fn toggle_selected_feedback(&mut self) -> bool {
+        let Some(actual_idx) = self.selected_actual_idx() else {
+            return false;
+        };
+        let Some(item) = self.active_items_mut().get_mut(actual_idx) else {
+            return false;
+        };
+        if !Self::item_is_enabled(item) {
+            return false;
+        }
+        let Some(feedback) = item.feedback.as_mut() else {
+            return false;
+        };
+        feedback.set_expanded(!feedback.expanded);
+        true
+    }
+
+    fn input_selected_feedback(&mut self, key_event: KeyEvent) -> bool {
+        let Some(actual_idx) = self.selected_actual_idx() else {
+            return false;
+        };
+        let Some(feedback) = self
+            .active_items_mut()
+            .get_mut(actual_idx)
+            .and_then(|item| item.feedback.as_mut())
+            .filter(|feedback| feedback.expanded)
+        else {
+            return false;
+        };
+        feedback.textarea.input(key_event);
+        feedback.notify_changed();
+        true
+    }
+
+    fn collapse_empty_inactive_feedback(&mut self, previous_actual_idx: Option<usize>) {
+        let current_actual_idx = self.selected_actual_idx();
+        let Some(previous_actual_idx) =
+            previous_actual_idx.filter(|idx| Some(*idx) != current_actual_idx)
+        else {
+            return;
+        };
+        let Some(feedback) = self
+            .active_items_mut()
+            .get_mut(previous_actual_idx)
+            .and_then(|item| item.feedback.as_mut())
+        else {
+            return;
+        };
+        if feedback.expanded && feedback.text().trim().is_empty() {
+            feedback.set_expanded(false);
+        }
+    }
+
     fn selected_item_has_toggle(&self) -> bool {
         self.selected_actual_idx()
             .and_then(|actual_idx| self.active_items().get(actual_idx))
@@ -385,6 +509,7 @@ impl ListSelectionView {
         };
         let has_initial_selected_idx = params.initial_selected_idx.is_some();
         let mut s = Self {
+            additional_shortcuts: params.additional_shortcuts,
             view_id: params.view_id,
             footer_note: params.footer_note,
             footer_hint: params.footer_hint,
@@ -410,6 +535,7 @@ impl ListSelectionView {
             filtered_indices: Vec::new(),
             last_selected_actual_idx: None,
             rendered_item_count: std::cell::Cell::new(0),
+            feedback_area: Cell::new(None),
             header,
             initial_selected_idx: params.initial_selected_idx,
             side_content: params.side_content,
@@ -614,10 +740,21 @@ impl ListSelectionView {
                         name_prefix_spans.push(toggle_prefix.into());
                     }
                     name_prefix_spans.extend(item.name_prefix_spans.clone());
-                    let description = is_selected
-                        .then(|| item.selected_description.clone())
-                        .flatten()
-                        .or_else(|| item.description.clone());
+                    let feedback_description = item.feedback.as_ref().and_then(|feedback| {
+                        feedback.expanded.then(|| {
+                            if feedback.text().is_empty() {
+                                feedback.placeholder.to_string()
+                            } else {
+                                feedback.text().to_string()
+                            }
+                        })
+                    });
+                    let description = feedback_description.or_else(|| {
+                        is_selected
+                            .then(|| item.selected_description.clone())
+                            .flatten()
+                            .or_else(|| item.description.clone())
+                    });
                     let wrap_indent = description.is_none().then_some(wrap_prefix_width);
                     GenericDisplayRow {
                         name: name_with_marker,
@@ -795,8 +932,16 @@ impl ListSelectionView {
             let Some(item) = self.active_items().get(actual_idx) else {
                 return;
             };
-            for act in &item.actions {
-                act(&self.app_event_tx);
+            if let Some(feedback) = &item.feedback {
+                let feedback_text = feedback.text().trim();
+                (feedback.action)(
+                    (!feedback_text.is_empty()).then(|| feedback_text.to_string()),
+                    &self.app_event_tx,
+                );
+            } else {
+                for act in &item.actions {
+                    act(&self.app_event_tx);
+                }
             }
             if item.dismiss_on_select {
                 self.completion = Some(ViewCompletion::Accepted);
@@ -975,6 +1120,30 @@ impl BottomPaneView for ListSelectionView {
     }
 
     fn handle_key_event(&mut self, key_event: KeyEvent) {
+        if let Some((_, action)) = self
+            .additional_shortcuts
+            .iter()
+            .find(|(shortcut, _)| shortcut.is_press(key_event))
+        {
+            self.completion = Some(ViewCompletion::Accepted);
+            action(&self.app_event_tx);
+            return;
+        }
+        if key_event.code == KeyCode::Tab && self.toggle_selected_feedback() {
+            return;
+        }
+        if self.selected_feedback_is_expanded()
+            && !matches!(
+                key_event.code,
+                KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown
+            )
+            && !self.keymap.accept.is_pressed(key_event)
+            && !self.keymap.cancel.is_pressed(key_event)
+        {
+            self.input_selected_feedback(key_event);
+            return;
+        }
+        let previous_actual_idx = self.selected_actual_idx();
         // Searchable lists reserve printable characters for query input. This
         // keeps vim-style plain j/k/h/l useful in non-search lists without
         // making those letters impossible to type into a filter.
@@ -1068,6 +1237,7 @@ impl BottomPaneView for ListSelectionView {
                         && Self::item_is_enabled(item)
                 }) {
                     self.select_shortcut(idx);
+                    self.collapse_empty_inactive_feedback(previous_actual_idx);
                     return;
                 }
                 if let Some(idx) = c
@@ -1080,9 +1250,25 @@ impl BottomPaneView for ListSelectionView {
             }
             _ => {}
         }
+        self.collapse_empty_inactive_feedback(previous_actual_idx);
     }
 
     fn handle_paste(&mut self, pasted: String) -> bool {
+        if self.selected_feedback_is_expanded() {
+            let Some(actual_idx) = self.selected_actual_idx() else {
+                return false;
+            };
+            let Some(feedback) = self
+                .active_items_mut()
+                .get_mut(actual_idx)
+                .and_then(|item| item.feedback.as_mut())
+            else {
+                return false;
+            };
+            feedback.textarea.insert_str(&pasted);
+            feedback.notify_changed();
+            return true;
+        }
         if !self.is_searchable {
             return false;
         }
@@ -1139,6 +1325,18 @@ impl BottomPaneView for ListSelectionView {
 }
 
 impl Renderable for ListSelectionView {
+    fn cursor_pos(&self, _area: Rect) -> Option<(u16, u16)> {
+        let feedback_area = self.feedback_area.get()?;
+        let feedback = self
+            .selected_actual_idx()
+            .and_then(|actual_idx| self.active_items().get(actual_idx))
+            .and_then(|item| item.feedback.as_ref())
+            .filter(|feedback| feedback.expanded)?;
+        feedback
+            .textarea
+            .cursor_pos_with_state(feedback_area, *feedback.textarea_state.borrow())
+    }
+
     fn desired_height(&self, width: u16) -> u16 {
         // Inner content width after menu surface horizontal insets (2 per side).
         let inner_width = popup_content_width(width);
@@ -1308,6 +1506,7 @@ impl Renderable for ListSelectionView {
         }
 
         // -- List rows --
+        self.feedback_area.set(None);
         if list_area.height > 0 {
             let render_area = Rect {
                 x: if rows.is_empty() {
@@ -1340,6 +1539,28 @@ impl Renderable for ListSelectionView {
                 ),
             };
             self.rendered_item_count.set(rendered_rows.items);
+            if let Some(feedback_area) = rendered_rows.selected_description_area
+                && !feedback_area.is_empty()
+                && let Some(feedback) = self
+                    .selected_actual_idx()
+                    .and_then(|actual_idx| self.active_items().get(actual_idx))
+                    .and_then(|item| item.feedback.as_ref())
+                    .filter(|feedback| feedback.expanded)
+            {
+                Clear.render(feedback_area, buf);
+                let mut state = feedback.textarea_state.borrow_mut();
+                StatefulWidgetRef::render_ref(
+                    &(&feedback.textarea),
+                    feedback_area,
+                    buf,
+                    &mut state,
+                );
+                if feedback.text().is_empty() {
+                    Paragraph::new(Line::from(feedback.placeholder.dim()))
+                        .render(feedback_area, buf);
+                }
+                self.feedback_area.set(Some(feedback_area));
+            }
         }
 
         // -- Side content (preview panel) --
@@ -1441,6 +1662,10 @@ impl ListSelectionView {
         self.rendered_item_count.get()
     }
 }
+
+#[cfg(test)]
+#[path = "list_selection_view_shortcuts_tests.rs"]
+mod shortcut_tests;
 
 #[cfg(test)]
 mod tests {

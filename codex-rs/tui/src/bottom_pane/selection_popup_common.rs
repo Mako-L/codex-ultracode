@@ -456,6 +456,7 @@ fn adjust_start_for_wrapped_selection_visibility(
 pub(crate) struct RenderedRows {
     pub(crate) lines: u16,
     pub(crate) items: usize,
+    pub(crate) selected_description_area: Option<Rect>,
 }
 
 fn render_rows_inner(
@@ -475,6 +476,7 @@ fn render_rows_inner(
         return RenderedRows {
             lines: u16::from(area.height > 0),
             items: 0,
+            selected_description_area: None,
         };
     }
 
@@ -509,11 +511,13 @@ fn render_rows_inner(
     let mut cur_y = area.y;
     let mut rendered_lines: u16 = 0;
     let mut rendered_items = 0;
+    let mut selected_description_area = None;
     for (i, row) in rows_all.iter().enumerate().skip(start_idx).take(max_items) {
         if cur_y >= area.y + area.height {
             break;
         }
 
+        let row_y = cur_y;
         let mut wrapped =
             wrap_row_lines(row, desc_col, area.width, column_width.description_layout);
         apply_row_state_style(
@@ -543,12 +547,29 @@ fn render_rows_inner(
         }
         if rendered_item {
             rendered_items += 1;
+            if Some(i) == state.selected_idx
+                && row.description.is_some()
+                && !column_width
+                    .description_layout
+                    .should_stack(area.width, desc_col)
+            {
+                let x_offset = u16::try_from(desc_col)
+                    .unwrap_or(area.width)
+                    .min(area.width);
+                selected_description_area = Some(Rect {
+                    x: area.x.saturating_add(x_offset),
+                    y: row_y,
+                    width: area.width.saturating_sub(x_offset),
+                    height: cur_y.saturating_sub(row_y).max(1),
+                });
+            }
         }
     }
 
     RenderedRows {
         lines: rendered_lines,
         items: rendered_items,
+        selected_description_area,
     }
 }
 
@@ -651,6 +672,7 @@ pub(crate) fn render_rows_single_line_with_col_width_mode(
         return RenderedRows {
             lines: u16::from(area.height > 0),
             items: 0,
+            selected_description_area: None,
         };
     }
 
@@ -674,6 +696,7 @@ pub(crate) fn render_rows_single_line_with_col_width_mode(
 
     let mut cur_y = area.y;
     let mut rendered_lines: u16 = 0;
+    let mut selected_description_area = None;
     for (i, row) in rows_all
         .iter()
         .enumerate()
@@ -706,6 +729,17 @@ pub(crate) fn render_rows_single_line_with_col_width_mode(
             },
             buf,
         );
+        if Some(i) == state.selected_idx && row.description.is_some() {
+            let x_offset = u16::try_from(desc_col)
+                .unwrap_or(area.width)
+                .min(area.width);
+            selected_description_area = Some(Rect {
+                x: area.x.saturating_add(x_offset),
+                y: cur_y,
+                width: area.width.saturating_sub(x_offset),
+                height: 1,
+            });
+        }
         cur_y = cur_y.saturating_add(1);
         rendered_lines = rendered_lines.saturating_add(1);
     }
@@ -713,6 +747,7 @@ pub(crate) fn render_rows_single_line_with_col_width_mode(
     RenderedRows {
         lines: rendered_lines,
         items: rendered_lines as usize,
+        selected_description_area,
     }
 }
 
