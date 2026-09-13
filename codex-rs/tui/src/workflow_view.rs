@@ -6,6 +6,7 @@ use ratatui::layout::Rect;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use serde_json::Value;
+use std::cell::Cell;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -71,6 +72,7 @@ pub(crate) enum WorkflowAction {
 
 pub(crate) struct WorkflowView {
     snapshot: Value,
+    detail_scroll_limit: Cell<usize>,
     pub state: WorkflowViewState,
 }
 
@@ -79,6 +81,7 @@ impl WorkflowView {
         let count = snapshot["runs"].as_array().map_or(0, Vec::len);
         Self {
             snapshot,
+            detail_scroll_limit: Cell::new(0),
             state: view.unwrap_or(WorkflowViewState {
                 screen: if count == 1 {
                     WorkflowScreen::Overview
@@ -288,10 +291,18 @@ impl WorkflowView {
                 self.state.scroll = 0;
             }
             KeyCode::Char('j') if self.state.screen == WorkflowScreen::Detail => {
-                self.state.scroll += 1
+                self.state.scroll = self
+                    .state
+                    .scroll
+                    .saturating_add(1)
+                    .min(self.detail_scroll_limit.get())
             }
             KeyCode::Char('k') if self.state.screen == WorkflowScreen::Detail => {
-                self.state.scroll = self.state.scroll.saturating_sub(1)
+                self.state.scroll = self
+                    .state
+                    .scroll
+                    .min(self.detail_scroll_limit.get())
+                    .saturating_sub(1)
             }
             KeyCode::Down => {
                 if self.state.screen == WorkflowScreen::Picker {
@@ -886,8 +897,14 @@ fn render_overview(view: &WorkflowView, width: usize, height: usize) -> Vec<Stri
         phases.len()
     };
     let left_offset = viewport(left_selected, left_count, body_rows);
+    let detail_scroll_limit = if view.state.screen == WorkflowScreen::Detail {
+        right_lines.len().saturating_sub(body_rows)
+    } else {
+        0
+    };
+    view.detail_scroll_limit.set(detail_scroll_limit);
     let right_offset = if view.state.screen == WorkflowScreen::Detail {
-        view.state.scroll
+        view.state.scroll.min(detail_scroll_limit)
     } else if view.state.focus == WorkflowFocus::Workers {
         viewport(view.state.worker, workers.len(), body_rows)
     } else {
@@ -969,14 +986,37 @@ fn render_overview(view: &WorkflowView, width: usize, height: usize) -> Vec<Stri
             )
         ));
     }
+    let scroll_range = if detail_scroll_limit > 0 {
+        format!(
+            " {} {}–{} of {} {} ",
+            if right_offset > 0 { "↑" } else { " " },
+            right_offset + 1,
+            right_offset + body_rows,
+            right_lines.len(),
+            if right_offset < detail_scroll_limit {
+                "↓"
+            } else {
+                " "
+            },
+        )
+    } else {
+        String::new()
+    };
+    let scroll_range = cell_cut(&scroll_range, right_width);
     out.push(format!(
-        "   ╰{}┴{}╯",
+        "   ╰{}┴{}{}╯",
         "─".repeat(left_width),
-        "─".repeat(right_width)
+        "─".repeat(right_width.saturating_sub(cell_width(&scroll_range))),
+        scroll_range
     ));
     let controls = if view.state.screen == WorkflowScreen::Detail {
         format!(
-            "↑↓ agent{}",
+            "↑↓ agent{}{}",
+            if detail_scroll_limit > 0 {
+                " · j/k scroll"
+            } else {
+                ""
+            },
             if workers
                 .get(view.state.worker)
                 .is_some_and(|w| w["status"] == "running")
@@ -1400,6 +1440,39 @@ mod tests {
         );
         v.handle_key(KeyEvent::from(KeyCode::Enter));
         assert!(v.state.expanded);
+    }
+    #[test]
+    fn detail_scroll_matches_reference_limits_and_range_hint() {
+        let mut item = run();
+        item["workers"][0]["output"] = json!(
+            (1..=80)
+                .map(|line| format!("line {line:03}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        let mut view = WorkflowView::new(json!({"runs":[item]}), None);
+        view.state.screen = WorkflowScreen::Detail;
+        let top = text(&view, 160, 20);
+        assert!(top.contains("j/k scroll"));
+        assert!(top.contains("1–9 of 90 ↓"));
+        for _ in 0..200 {
+            view.handle_key(KeyEvent::from(KeyCode::Char('j')));
+        }
+        let bottom = text(&view, 160, 20);
+        assert!(bottom.contains("line 080"));
+        assert!(bottom.contains("↑ 82–90 of 90"));
+        view.handle_key(KeyEvent::from(KeyCode::Char('j')));
+        assert_eq!(text(&view, 160, 20), bottom);
+        view.handle_key(KeyEvent::from(KeyCode::Char('k')));
+        let previous = text(&view, 160, 20);
+        assert!(previous.contains("line 079"));
+        assert!(!previous.contains("line 080"));
+        assert!(previous.contains("↑ 81–89 of 90 ↓"));
+        let expanded_viewport = text(&view, 160, 110);
+        assert!(expanded_viewport.contains("line 080"));
+        assert!(!expanded_viewport.contains("j/k scroll"));
+        view.handle_key(KeyEvent::from(KeyCode::Char('k')));
+        assert_eq!(text(&view, 160, 110), expanded_viewport);
     }
     #[test]
     fn narrow_tall_and_sanitized() {
