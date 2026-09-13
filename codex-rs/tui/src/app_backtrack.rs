@@ -213,7 +213,7 @@ impl App {
                     .await
                     .map_err(|e| e.to_string())?;
                 if let Some(Overlay::Workflow(overlay)) = self.overlay.as_mut() {
-                    overlay.update(json!({"runs":[run]}));
+                    overlay.view.update_run(run);
                 }
                 return Ok(());
             }
