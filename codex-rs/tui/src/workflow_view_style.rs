@@ -46,6 +46,15 @@ pub(crate) fn styled_lines(
         .enumerate()
         .map(|(index, line)| {
             let trimmed = line.trim_start();
+            if trimmed.starts_with('╰') && line.contains(" of ") {
+                let start = line.rfind('─').map_or(0, |offset| offset + '─'.len_utf8());
+                let end = line.rfind('╯').unwrap_or(line.len());
+                return Line::from(vec![
+                    Span::styled(line[..start].to_owned(), plain.fg(Color::White)),
+                    Span::styled(line[start..end].to_owned(), gray),
+                    Span::styled(line[end..].to_owned(), plain.fg(Color::White)),
+                ]);
+            }
             let style = if line.starts_with("▔▔▔▔▔▔▔▔▔▔") {
                 Some(plain.fg(Color::LightBlue))
             } else if Some(index) == divider {
