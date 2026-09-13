@@ -24,7 +24,6 @@ use crossterm::event::EnableBracketedPaste;
 use crossterm::event::EnableFocusChange;
 use crossterm::event::KeyEvent;
 use crossterm::terminal::EnterAlternateScreen;
-use crossterm::terminal::LeaveAlternateScreen;
 #[cfg(not(unix))]
 use crossterm::terminal::supports_keyboard_enhancement;
 use ratatui::backend::Backend;
@@ -61,6 +60,7 @@ use crate::tui::scrollback::ScrollbackStrategy;
 use codex_config::types::NotificationCondition;
 use codex_config::types::NotificationMethod;
 
+mod alternate_screen;
 mod event_stream;
 mod frame_rate_limiter;
 mod frame_requester;
@@ -855,12 +855,7 @@ impl Tui {
         if !self.alt_screen_enabled {
             return Ok(());
         }
-        // Disable alternate scroll when leaving alt-screen
-        let _ = execute!(self.terminal.backend_mut(), DisableAlternateScroll);
-        let _ = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
-        if let Some(saved) = self.alt_saved_viewport.take() {
-            self.terminal.set_viewport_area(saved);
-        }
+        alternate_screen::restore_main_screen(&mut self.terminal, self.alt_saved_viewport.take());
         self.alt_screen_active.store(false, Ordering::Relaxed);
         Ok(())
     }
