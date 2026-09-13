@@ -1,5 +1,6 @@
 mod history;
 mod normalize;
+pub(crate) use normalize::complete_interrupted_tool_calls;
 pub(crate) mod updates;
 
 pub(crate) use history::ContextManager;

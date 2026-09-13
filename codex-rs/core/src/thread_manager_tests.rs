@@ -218,13 +218,26 @@ async fn spawn_subagent_forks_active_paginated_parent_without_legacy_thread_read
         .await
         .expect("inject parent context");
 
+    root.thread
+        .inject_response_items(vec![ResponseItem::CustomToolCall {
+            id: None,
+            status: None,
+            call_id: "pending-parent-call".into(),
+            name: "exec".into(),
+            namespace: None,
+            input: "await workflow()".into(),
+            internal_chat_message_metadata_passthrough: None,
+        }])
+        .await
+        .expect("inject pending parent call");
+
     let child = manager
         .spawn_subagent(root.thread_id, StartThreadOptions::new(config))
         .await
         .expect("fork active paginated parent");
 
     assert_eq!(
-        child.thread.config_snapshot().await.parent_thread_id,
+        child.thread.config_snapshot().await.forked_from_thread_id,
         Some(root.thread_id)
     );
     let child_history = child.thread.session.conversation_history_snapshot().await;
@@ -235,6 +248,31 @@ async fn spawn_subagent_forks_active_paginated_parent_without_legacy_thread_read
                 part,
                 ContentItem::InputText { text } if text == "known parent context"
             ))
+    )));
+    let expected_output = ResponseItem::CustomToolCallOutput {
+        id: None,
+        call_id: "pending-parent-call".into(),
+        name: None,
+        output: codex_protocol::models::FunctionCallOutputPayload::from_text("aborted".into()),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let mut context = crate::context_manager::ContextManager::new();
+    context.replace(child_history.items().cloned().collect());
+    let prompt = context.for_prompt(&[codex_protocol::openai_models::InputModality::Text]);
+    let mut actual_output = prompt.iter().find(|item| matches!(
+            item,
+            ResponseItem::CustomToolCallOutput { call_id, .. } if call_id == "pending-parent-call"
+        )).expect("pending call has a child output").clone();
+    // Prompt normalization assigns stable IDs to synthetic outputs.
+    if let ResponseItem::CustomToolCallOutput { id, .. } = &mut actual_output {
+        assert!(id.is_some());
+        *id = None;
+    }
+    assert_eq!(actual_output, expected_output);
+    let parent_history = root.thread.session.conversation_history_snapshot().await;
+    assert!(!parent_history.items().any(|item| matches!(
+        item,
+        ResponseItem::CustomToolCallOutput { call_id, .. } if call_id == "pending-parent-call"
     )));
 }
 
@@ -2318,6 +2356,47 @@ async fn injected_models_manager_controls_refresh_policy() {
         2
     );
     assert!(!config.codex_home.join("models_cache.json").exists());
+}
+
+#[test]
+fn interrupted_fork_completes_pending_custom_call_in_child_history() {
+    let original = vec![
+        RolloutItem::ResponseItem(user_msg("start a workflow").into()),
+        RolloutItem::ResponseItem(
+            ResponseItem::CustomToolCall {
+                id: None,
+                status: None,
+                call_id: "pending-parent-call".into(),
+                name: "exec".into(),
+                namespace: None,
+                input: "await workflow()".into(),
+                internal_chat_message_metadata_passthrough: None,
+            }
+            .into(),
+        ),
+    ];
+    let fork = append_interrupted_boundary(
+        InitialHistory::Forked(original.clone()),
+        /*turn_id*/ None,
+        /*started_at*/ None,
+        InterruptedTurnHistoryMarker::ContextualUser,
+    );
+    let items = fork.get_rollout_items();
+    assert_eq!(
+        serde_json::to_value(&items[..original.len()]).unwrap(),
+        serde_json::to_value(&original).unwrap(),
+    );
+    let expected_output = ResponseItem::CustomToolCallOutput {
+        id: None,
+        call_id: "pending-parent-call".into(),
+        name: None,
+        output: codex_protocol::models::FunctionCallOutputPayload::from_text("aborted".into()),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    assert_eq!(
+        serde_json::to_value(&items[original.len()]).unwrap(),
+        serde_json::to_value(RolloutItem::ResponseItem(expected_output.into())).unwrap(),
+    );
 }
 
 #[test]
