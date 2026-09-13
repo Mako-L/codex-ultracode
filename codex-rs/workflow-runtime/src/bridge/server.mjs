@@ -5,6 +5,7 @@ import {randomUUID} from 'node:crypto';
 import {createPeer} from './protocol.mjs';
 import {createNativeAdapter} from './adapter.mjs';
 import {parseScript,renameWorkflowSource} from '../workflow/script.mjs';
+import {workflowConsentPresentation} from '../workflow/consent.mjs';
 import {runWorkflow} from '../workflow/runtime.mjs';
 import {atomicJSON,digest,listRuns,readRun,requestControl,runDirectory} from '../workflow/store.mjs';
 import {workflowCatalog} from '../workflow/catalog.mjs';
@@ -70,7 +71,10 @@ export function createBridgeServer({cwd=process.cwd(),stateDir=path.join(cwd,'.u
     if(method==='listRuns')return {runs:listRuns(stateDir).map(publicState)};
     if(method==='inspectRun')return publicState(current(required(params.runId,'runId')));
     if(method==='listSavedWorkflows')return {workflows:catalog(path.resolve(params.cwd??cwd))};
-    if(method==='validateSource'){const source=required(params.source,'source');return {meta:parseScript(source).meta,digest:digest(source)};}
+    if(method==='validateSource'){
+      const source=required(params.source,'source'),parsed=parseScript(source);
+      return {meta:parsed.meta,digest:digest(source),consent:workflowConsentPresentation(source,{...parsed,...(Object.hasOwn(params,'args')?{args:params.args}:{})})};
+    }
     if(method==='runSource') {parseScript(required(params.source,'source'));return launch(params);}
     if(method==='runSaved'||method==='readSavedSource') {
       const record=saved.get(required(params.workflowId,'workflowId'));if(!record)throw fail('Saved workflow not found','NOT_FOUND');
