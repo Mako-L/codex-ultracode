@@ -1,6 +1,10 @@
 use anyhow::Result;
 use app_test_support::TestAppServer;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SandboxPolicy;
+use codex_app_server_protocol::ThreadSettingsUpdateParams;
+use codex_app_server_protocol::ThreadSettingsUpdateResponse;
+use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::WorkflowAuthorityCaptureResponse;
 use codex_app_server_protocol::WorkflowWorkerStartResponse;
@@ -166,6 +170,69 @@ async fn worker_start_attaches_requester_before_submitting_first_turn() -> Resul
     .await;
     let mut resume_params = start_params;
     resume_params["resumeThreadId"] = json!(replacement.thread_id);
+    let foreign_workspace = TempDir::new()?;
+    let original_policy = SandboxPolicy::ReadOnly {
+        network_access: false,
+    };
+    let requests_before_drift = model_server
+        .received_requests()
+        .await
+        .expect("model requests")
+        .into_iter()
+        .filter(|request| request.method == "POST" && request.url.path().ends_with("/responses"))
+        .count();
+    for (cwd, reject_resume) in [(foreign_workspace.path(), true), (project.path(), false)] {
+        let id = server
+            .send_thread_settings_update_request(ThreadSettingsUpdateParams {
+                thread_id: replacement.thread_id.clone(),
+                cwd: Some(cwd.to_path_buf()),
+                ..Default::default()
+            })
+            .await?;
+        let _: ThreadSettingsUpdateResponse = server.read_response(id).await?;
+        let updated: ThreadSettingsUpdatedNotification = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            server.read_notification("thread/settings/updated"),
+        )
+        .await??;
+        assert_eq!(updated.thread_id, replacement.thread_id);
+        assert_eq!(updated.thread_settings.cwd.as_path(), cwd);
+        assert_eq!(updated.thread_settings.sandbox_policy, original_policy);
+        if reject_resume {
+            assert_eq!(
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    rejected_start(&mut server, resume_params.clone()),
+                )
+                .await??,
+                "workflow worker resume lineage is invalid"
+            );
+        }
+    }
+    // Workflow children also retain the native permission constraint on settings updates.
+    let id = server
+        .send_thread_settings_update_request(ThreadSettingsUpdateParams {
+            thread_id: replacement.thread_id.clone(),
+            sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
+            ..Default::default()
+        })
+        .await?;
+    let rejected = server
+        .read_stream_until_error_message(RequestId::Integer(id))
+        .await?;
+    assert_eq!(rejected.error.code, -32600);
+    assert_eq!(
+        model_server
+            .received_requests()
+            .await
+            .expect("model requests")
+            .into_iter()
+            .filter(|request| {
+                request.method == "POST" && request.url.path().ends_with("/responses")
+            })
+            .count(),
+        requests_before_drift
+    );
     let resumed: WorkflowWorkerStartResponse =
         request(&mut server, "workflow/worker/start", resume_params).await?;
     assert_eq!(resumed.thread_id, replacement.thread_id);
