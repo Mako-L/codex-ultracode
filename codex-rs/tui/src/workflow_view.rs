@@ -71,6 +71,9 @@ pub(crate) enum WorkflowAction {
     },
 }
 
+#[path = "workflow_view_updates.rs"]
+mod updates;
+
 pub(crate) struct WorkflowView {
     snapshot: Value,
     detail_scroll_limit: Cell<usize>,
@@ -104,10 +107,6 @@ impl WorkflowView {
                 return_screen: None,
             }),
         }
-    }
-    pub(crate) fn update(&mut self, snapshot: Value) {
-        self.snapshot = snapshot;
-        self.clamp();
     }
     fn runs(&self) -> &[Value] {
         self.snapshot["runs"]
