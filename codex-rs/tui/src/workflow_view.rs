@@ -1523,6 +1523,36 @@ mod tests {
         v.handle_key(KeyEvent::from(KeyCode::Enter));
         assert!(v.state.expanded);
     }
+
+    #[test]
+    fn terminal_lifecycle_keys_do_not_dispatch_or_change_the_view() {
+        for status in ["completed", "failed", "stopped"] {
+            for screen in [
+                WorkflowScreen::Picker,
+                WorkflowScreen::Overview,
+                WorkflowScreen::Detail,
+            ] {
+                for focus in [WorkflowFocus::Phases, WorkflowFocus::Workers] {
+                    let mut item = run();
+                    item["status"] = json!(status);
+                    for worker in item["workers"].as_array_mut().unwrap() {
+                        worker["status"] = json!(status);
+                    }
+                    let mut view = WorkflowView::new(json!({"runs":[item]}), None);
+                    view.state.screen = screen.clone();
+                    view.state.focus = focus.clone();
+                    let before_state = view.state.clone();
+                    let before = text(&view, 160, 48);
+                    for key in ['p', 'x', 'r'] {
+                        assert_eq!(view.handle_key(KeyEvent::from(KeyCode::Char(key))), None);
+                        assert_eq!(view.state, before_state);
+                        assert_eq!(text(&view, 160, 48), before);
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn detail_scroll_matches_reference_limits_and_range_hint() {
         let mut item = run();
