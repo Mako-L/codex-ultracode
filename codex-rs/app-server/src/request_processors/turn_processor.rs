@@ -123,6 +123,7 @@ struct WorkflowWorkerOwnership {
     run_id: String,
     worker_id: String,
     launch_intent: bool,
+    admitted_authority: Option<ThreadConfigSnapshot>,
     read_only: bool,
     agent_type: String,
     schema_digest: Option<String>,
@@ -2102,6 +2103,10 @@ impl TurnRequestProcessor {
                 || ownership.run_id != params.run_id
                 || ownership.worker_id != params.worker_id
                 || ownership.launch_intent
+                || ownership
+                    .admitted_authority
+                    .as_ref()
+                    .is_none_or(|admitted| !workflow_authority_matches(admitted, &child_snapshot))
                 || ownership.read_only != force_read_only
                 || ownership.agent_type != params.agent_type
                 || ownership.schema_digest != schema_digest
@@ -2174,6 +2179,7 @@ impl TurnRequestProcessor {
                     run_id: params.run_id.clone(),
                     worker_id: params.worker_id.clone(),
                     launch_intent: true,
+                    admitted_authority: None,
                     read_only: force_read_only,
                     agent_type: params.agent_type.clone(),
                     schema_digest,
@@ -2197,14 +2203,14 @@ impl TurnRequestProcessor {
                         start_gate: Some({
                             let (attached_tx, attached_rx) = tokio::sync::oneshot::channel();
                             let listener_task_context = self.listener_task_context();
+                            let workflow_workers = Arc::clone(&self.workflow_workers);
                             let connection_id = request_id.connection_id;
                             tokio::spawn(async move {
                                 for _ in 0..5_000 {
-                                    if listener_task_context
+                                    if let Ok(thread) = listener_task_context
                                         .thread_manager
                                         .get_thread(reserved_thread_id)
                                         .await
-                                        .is_ok()
                                     {
                                         if matches!(
                                             super::thread_lifecycle::ensure_conversation_listener(
@@ -2216,6 +2222,15 @@ impl TurnRequestProcessor {
                                             .await,
                                             Ok(EnsureConversationListenerResult::Attached)
                                         ) {
+                                            let admitted_authority = thread.config_snapshot().await;
+                                            if let Some(worker) = workflow_workers
+                                                .lock()
+                                                .await
+                                                .get_mut(&reserved_thread_id)
+                                            {
+                                                worker.admitted_authority =
+                                                    Some(admitted_authority);
+                                            }
                                             let _ = attached_tx.send(());
                                         }
                                         return;
