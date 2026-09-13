@@ -250,15 +250,28 @@ pub(crate) fn tool_specs() -> Vec<DynamicToolSpec> {
     specs.push(DynamicToolSpec::Function(DynamicToolFunctionSpec {
         name: "workflow".into(),
         description: "Launch or resume a user-requested Ultracode workflow after native validation and consent. Returns immediately with a workflow run ID, not a worker thread ID. Completion arrives automatically as a typed workflow.completion message; acknowledge launch and finish the current turn. This tool does not accept polling or wait actions.".into(),
+        // Keep shared properties visible to code-mode renderers that prioritize unions over siblings.
         input_schema: json!({
-            "type":"object","additionalProperties":false,
-            "properties":{
-                "script":{"type":"string","minLength":1},"name":{"type":"string","minLength":1},
-                "scriptPath":{"type":"string","minLength":1},"args":{},"resumeFromRunId":{"type":"string","minLength":1},
-                "title":{"type":"string"},"description":{"type":"string"},
-                "concurrency":{"type":"integer","minimum":1,"maximum":16,"description":"Maximum simultaneous workflow workers; omitted uses the runtime default or saved run limit."}
-            },
-            "anyOf":[{"required":["script"]},{"required":["name"]},{"required":["scriptPath"]},{"required":["resumeFromRunId"]}]
+            "type":"object",
+            "allOf":[
+                {
+                    "type":"object","additionalProperties":false,
+                    "properties":{
+                        "script":{"type":"string","minLength":1},"name":{"type":"string","minLength":1},
+                        "scriptPath":{"type":"string","minLength":1},"args":{},"resumeFromRunId":{"type":"string","minLength":1},
+                        "title":{"type":"string"},"description":{"type":"string"},
+                        "concurrency":{"type":"integer","minimum":1,"maximum":16,"description":"Maximum simultaneous workflow workers; omitted uses the runtime default or saved run limit."}
+                    }
+                },
+                {
+                    "anyOf":[
+                        {"properties":{"script":{"type":"string","minLength":1}},"required":["script"]},
+                        {"properties":{"name":{"type":"string","minLength":1}},"required":["name"]},
+                        {"properties":{"scriptPath":{"type":"string","minLength":1}},"required":["scriptPath"]},
+                        {"properties":{"resumeFromRunId":{"type":"string","minLength":1}},"required":["resumeFromRunId"]}
+                    ]
+                }
+            ]
         }),
         defer_loading: false,
     }));
@@ -1606,3 +1619,7 @@ fn truncate(text: &str, limit: usize) -> String {
 #[cfg(test)]
 #[path = "dynamic_tools_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "dynamic_workflow_schema_tests.rs"]
+mod workflow_schema_tests;

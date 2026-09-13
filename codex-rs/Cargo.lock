@@ -4514,6 +4514,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-arg0",
  "codex-cloud-config",
+ "codex-code-mode-protocol",
  "codex-config",
  "codex-connectors",
  "codex-core-plugins",
