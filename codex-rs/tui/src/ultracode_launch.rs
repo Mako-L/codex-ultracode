@@ -1,17 +1,14 @@
 //! Shared launch preparation after the frontend's native route has authorized a workflow call.
 use crate::ultracode_bridge::BridgeError;
 use crate::ultracode_bridge::UltracodeBridge;
+use crate::ultracode_source::SourceLocation;
+use crate::ultracode_source::WorkflowSourcePreview;
 use codex_app_server_client::AppServerRequestHandle;
-use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::DynamicToolCallResponse;
-use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::WorkflowAuthorityCaptureResponse;
-use codex_app_server_protocol::WorkflowScriptReadParams;
-use codex_app_server_protocol::WorkflowScriptReadResponse;
 use serde_json::Value;
 use serde_json::json;
 use std::time::Duration;
-use uuid::Uuid;
 
 #[cfg(test)]
 #[path = "ultracode_launch_tests.rs"]
@@ -86,22 +83,46 @@ pub(crate) async fn launch(
     bridge: &UltracodeBridge,
     arguments: &Value,
 ) -> Result<WorkflowLaunch, BridgeError> {
+    launch_with_preview(
+        handle, parent_id, authority, bridge, arguments, /*preview*/ None,
+    )
+    .await
+}
+
+pub(crate) async fn launch_with_preview(
+    handle: &AppServerRequestHandle,
+    parent_id: &str,
+    authority: &WorkflowAuthorityCaptureResponse,
+    bridge: &UltracodeBridge,
+    arguments: &Value,
+    preview: Option<&WorkflowSourcePreview>,
+) -> Result<WorkflowLaunch, BridgeError> {
     validate_arguments(arguments)?;
-    let file_source = if let Some(script_path) = arguments.get("scriptPath").and_then(Value::as_str)
-    {
-        let response: WorkflowScriptReadResponse = handle
-            .request_typed(ClientRequest::WorkflowScriptRead {
-                request_id: RequestId::String(format!("workflow-script:{}", Uuid::new_v4())),
-                params: WorkflowScriptReadParams {
-                    parent_thread_id: parent_id.to_string(),
-                    authority_ref: authority.authority_ref.clone(),
-                    authority_digest: authority.authority_digest.clone(),
-                    script_path: script_path.to_string(),
-                },
-            })
-            .await
-            .map_err(|error| BridgeError::host(error.to_string()))?;
-        Some(response.source)
+    let selected_source = crate::ultracode_source::source_location(arguments)?;
+    let verified = if let Some(preview) = preview {
+        Some(
+            crate::ultracode_source::read_preview(
+                handle,
+                parent_id,
+                authority,
+                bridge,
+                arguments,
+                Some(preview),
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+    let file_source = if let Some(verified) = &verified {
+        // Pin verified bytes even when resume would otherwise reread mutable stored source.
+        Some(verified.source.clone())
+    } else if let SourceLocation::File(path) = selected_source {
+        Some(
+            crate::ultracode_source::read_file(handle, parent_id, authority, path)
+                .await?
+                .source,
+        )
     } else {
         None
     };
@@ -121,24 +142,37 @@ pub(crate) async fn launch(
     }
     let mut source_digest = None;
     if method == "runSaved" {
-        let catalog = bridge
-            .request(
-                "listSavedWorkflows",
-                json!({"cwd":authority.cwd}),
-                Duration::from_secs(30),
-            )
-            .await?;
-        let name = arguments["name"].as_str().unwrap_or_default();
-        let saved = catalog["workflows"]
-            .as_array()
-            .and_then(|items| items.iter().find(|item| item["name"] == name))
-            .ok_or_else(|| BridgeError::host("Saved workflow not found"))?;
-        params["workflowId"] = saved["workflowId"].clone();
-        source_digest = saved
-            .get("sourceDigest")
-            .or_else(|| saved.get("digest"))
-            .and_then(Value::as_str)
-            .map(str::to_string);
+        if let Some(verified) = &verified {
+            params["workflowId"] =
+                json!(
+                    verified
+                        .workflow_id
+                        .as_ref()
+                        .ok_or_else(|| BridgeError::host(
+                            "Saved workflow preview identity is unavailable"
+                        ))?
+                );
+            source_digest = Some(verified.digest.clone());
+        } else {
+            let catalog = bridge
+                .request(
+                    "listSavedWorkflows",
+                    json!({"cwd":authority.cwd}),
+                    Duration::from_secs(30),
+                )
+                .await?;
+            let name = arguments["name"].as_str().unwrap_or_default();
+            let saved = catalog["workflows"]
+                .as_array()
+                .and_then(|items| items.iter().find(|item| item["name"] == name))
+                .ok_or_else(|| BridgeError::host("Saved workflow not found"))?;
+            params["workflowId"] = saved["workflowId"].clone();
+            source_digest = saved
+                .get("sourceDigest")
+                .or_else(|| saved.get("digest"))
+                .and_then(Value::as_str)
+                .map(str::to_string);
+        }
     } else if method == "resumeRun" {
         params["runId"] = arguments["resumeFromRunId"].clone();
         if let Some(source) = file_source {

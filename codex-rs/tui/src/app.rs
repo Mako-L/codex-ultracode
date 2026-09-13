@@ -249,6 +249,7 @@ mod thread_title;
 mod transcript_export;
 mod workflow;
 mod workflow_effort;
+mod workflow_preview;
 mod working_directory;
 
 use self::agent_navigation::AgentNavigationDirection;

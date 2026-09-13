@@ -1399,9 +1399,11 @@ pub(crate) enum WorkflowEvent {
         args: Option<String>,
     },
     RunSavedConsent {
+        thread_id: String,
         name: String,
         args: Option<String>,
         choice: WorkflowConsentChoice,
+        preview: Option<crate::ultracode_source::WorkflowSourcePreview>,
     },
     ToolCall {
         request_id: codex_app_server_protocol::RequestId,
@@ -1411,8 +1413,12 @@ pub(crate) enum WorkflowEvent {
         request_id: codex_app_server_protocol::RequestId,
         params: codex_app_server_protocol::DynamicToolCallParams,
         choice: WorkflowConsentChoice,
+        preview: Option<crate::ultracode_source::WorkflowSourcePreview>,
     },
-    ViewScript(String),
+    ViewScript {
+        thread_id: String,
+        source: String,
+    },
     Open {
         effort: Option<String>,
     },

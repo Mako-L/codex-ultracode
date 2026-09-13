@@ -1,0 +1,13 @@
+---
+source: tui/src/app/tests/workflow_preview_tests.rs
+assertion_line: 464
+expression: popup
+---
+  Run workflow /saved?
+
+› 1. Run once
+  2. Run and remember for this project
+  3. View raw script
+  4. Cancel
+
+  Press enter to confirm or esc to go back

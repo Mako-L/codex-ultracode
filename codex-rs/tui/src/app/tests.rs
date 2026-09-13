@@ -47,6 +47,8 @@ mod workflow_consent_tests;
 mod workflow_controls_tests;
 #[path = "tests/workflow_effort_tests.rs"]
 mod workflow_effort_tests;
+#[path = "tests/workflow_preview_tests.rs"]
+mod workflow_preview_tests;
 #[path = "tests/workflow_save_tests.rs"]
 mod workflow_save_tests;
 

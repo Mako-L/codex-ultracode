@@ -204,6 +204,7 @@ mod terminal_visualization_instructions;
 #[cfg(unix)]
 mod ultracode_host;
 mod ultracode_launch;
+mod ultracode_source;
 #[cfg(unix)]
 pub use ultracode_host::run as run_workflow_supervisor;
 #[cfg(unix)]
