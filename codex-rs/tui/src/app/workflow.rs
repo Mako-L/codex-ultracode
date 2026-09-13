@@ -1036,6 +1036,17 @@ impl App {
         self.chat_widget.show_selection_view(SelectionViewParams {
             title: Some("Run workflow?".into()),
             subtitle: Some("This workflow may start multiple native Codex workers.".into()),
+            on_cancel: Some(Box::new({
+                let request_id = request_id.clone();
+                let params = params.clone();
+                move |tx| {
+                    tx.send(AppEvent::Workflow(WorkflowEvent::Consent {
+                        request_id: request_id.clone(),
+                        params: params.clone(),
+                        choice: WorkflowConsentChoice::Cancel,
+                    }));
+                }
+            })),
             items: vec![
                 SelectionItem {
                     name: "Run once".into(),
