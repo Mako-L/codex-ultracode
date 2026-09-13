@@ -13,6 +13,10 @@ use serde_json::json;
 use std::time::Duration;
 use uuid::Uuid;
 
+#[cfg(test)]
+#[path = "ultracode_launch_tests.rs"]
+mod tests;
+
 pub(crate) struct WorkflowLaunch {
     pub result: Result<Value, BridgeError>,
     pub source_digest: Option<String>,
@@ -25,11 +29,29 @@ pub(crate) fn validate_arguments(arguments: &Value) -> Result<(), BridgeError> {
     for (key, value) in object {
         if !matches!(
             key.as_str(),
-            "script" | "name" | "scriptPath" | "args" | "resumeFromRunId" | "title" | "description"
+            "script"
+                | "name"
+                | "scriptPath"
+                | "args"
+                | "resumeFromRunId"
+                | "title"
+                | "description"
+                | "concurrency"
         ) {
             return Err(BridgeError::host(format!(
                 "Unknown workflow argument {key}. This tool launches or resumes workflows; completion arrives automatically."
             )));
+        }
+        if key == "concurrency" {
+            if !value
+                .as_u64()
+                .is_some_and(|limit| (1..=16).contains(&limit))
+            {
+                return Err(BridgeError::host(
+                    "Workflow concurrency must be an integer from 1 to 16",
+                ));
+            }
+            continue;
         }
         if key != "args" && !value.is_string() {
             return Err(BridgeError::host(format!(
@@ -93,6 +115,9 @@ pub(crate) async fn launch(
     let mut params = json!({"authorityRef":authority.authority_ref,"authorityDigest":authority.authority_digest,"model":authority.parent_model,"effort":authority.parent_effort});
     if let Some(args) = arguments.get("args") {
         params["args"] = args.clone();
+    }
+    if let Some(concurrency) = arguments.get("concurrency") {
+        params["concurrency"] = concurrency.clone();
     }
     let mut source_digest = None;
     if method == "runSaved" {

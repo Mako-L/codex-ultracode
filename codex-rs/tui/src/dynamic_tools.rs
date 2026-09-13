@@ -255,7 +255,8 @@ pub(crate) fn tool_specs() -> Vec<DynamicToolSpec> {
             "properties":{
                 "script":{"type":"string","minLength":1},"name":{"type":"string","minLength":1},
                 "scriptPath":{"type":"string","minLength":1},"args":{},"resumeFromRunId":{"type":"string","minLength":1},
-                "title":{"type":"string"},"description":{"type":"string"}
+                "title":{"type":"string"},"description":{"type":"string"},
+                "concurrency":{"type":"integer","minimum":1,"maximum":16,"description":"Maximum simultaneous workflow workers; omitted uses the runtime default or saved run limit."}
             },
             "anyOf":[{"required":["script"]},{"required":["name"]},{"required":["scriptPath"]},{"required":["resumeFromRunId"]}]
         }),
