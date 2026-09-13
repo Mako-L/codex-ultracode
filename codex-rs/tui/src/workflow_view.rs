@@ -706,6 +706,9 @@ fn detail_rows(w: &Value, size: usize, expanded: bool) -> Vec<String> {
     if let Some(isolation) = isolation {
         metadata.push(isolation);
     }
+    if w["cached"].as_bool() == Some(true) {
+        metadata.push("from journal".to_string());
+    }
     let metadata = if metadata.is_empty() {
         String::new()
     } else {

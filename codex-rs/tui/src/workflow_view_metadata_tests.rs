@@ -60,3 +60,19 @@ fn worker_detail_preserves_explicit_general_purpose_role() {
 
     assert_eq!(rows[0], "✔ Completed · gpt-5.6-luna · general-purpose");
 }
+
+#[test]
+fn worker_detail_shows_journal_replay_before_retry_metadata() {
+    let worker = json!({
+        "status": "completed",
+        "model": "gpt-5.6-luna",
+        "cached": true,
+        "attempt": 2,
+        "lastAttemptReason": "user-retry",
+    });
+    let rows = detail_rows(&worker, 100, false);
+    assert_eq!(
+        rows[0],
+        "✔ Completed · gpt-5.6-luna · from journal · attempt 2 (user retry)"
+    );
+}
