@@ -1,6 +1,7 @@
 use super::*;
 use crate::app_event::WorkflowConsentChoice;
 use crate::app_event::WorkflowEvent;
+use pretty_assertions::assert_eq;
 
 fn inline_call() -> codex_app_server_protocol::DynamicToolCallParams {
     codex_app_server_protocol::DynamicToolCallParams {
@@ -99,6 +100,84 @@ async fn manual_inline_consent_disables_remember_and_starts_nothing() -> Result<
     assert!(popup.contains("Run once"));
     assert!(popup.contains("Inline workflows cannot be remembered"));
     app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn keyboard_cancellation_answers_pending_workflow_consent() -> Result<()> {
+    for key in [
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+    ] {
+        let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+        let home = tempdir()?;
+        app.config.codex_home = home.path().to_path_buf().abs();
+        app.config
+            .permissions
+            .approval_policy
+            .set(AskForApproval::OnRequest.to_core())?;
+        app.config.approvals_reviewer = ApprovalsReviewer::User;
+        let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+        let mut tui = crate::tui::test_support::make_test_tui()?;
+        let params = inline_call();
+        app.handle_workflow_event(
+            &mut tui,
+            &mut app_server,
+            WorkflowEvent::ToolCall {
+                request_id: AppServerRequestId::Integer(45),
+                params: params.clone(),
+            },
+        )
+        .await?;
+        assert!(render_bottom_popup(&app.chat_widget, 100).contains("Run once"));
+        app.chat_widget.handle_key_event(key);
+        let cancellation = events.try_recv().ok();
+        if cancellation.is_none() {
+            app_server.shutdown().await?;
+            panic!(
+                "Keyboard cancellation dismissed consent without answering its request: {key:?}"
+            );
+        }
+        let Some(AppEvent::Workflow(WorkflowEvent::Consent {
+            request_id,
+            params: cancelled_params,
+            choice: WorkflowConsentChoice::Cancel,
+        })) = cancellation
+        else {
+            panic!("Expected workflow cancellation");
+        };
+        assert_eq!(request_id, AppServerRequestId::Integer(45));
+        assert_eq!(
+            serde_json::to_value(&cancelled_params)?,
+            serde_json::to_value(&params)?
+        );
+        app.handle_workflow_event(
+            &mut tui,
+            &mut app_server,
+            WorkflowEvent::Consent {
+                request_id,
+                params: cancelled_params,
+                choice: WorkflowConsentChoice::Cancel,
+            },
+        )
+        .await?;
+        let response = events.try_recv().expect("cancelled tool response");
+        let no_extra_response = events.try_recv().is_err();
+        app_server.shutdown().await?;
+        let AppEvent::DynamicToolCallCompleted {
+            request_id,
+            response,
+        } = response
+        else {
+            panic!("Expected cancelled tool response");
+        };
+        assert_eq!(request_id, AppServerRequestId::Integer(45));
+        assert!(!response.success);
+        assert!(no_extra_response);
+        assert!(app.workflow_sessions.is_empty());
+        assert!(!home.path().join("workflow-consent.json").exists());
+        assert!(!render_bottom_popup(&app.chat_widget, 100).contains("Run once"));
+    }
     Ok(())
 }
 
