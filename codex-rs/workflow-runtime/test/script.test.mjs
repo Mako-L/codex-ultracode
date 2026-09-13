@@ -56,10 +56,10 @@ test('metadata is the first statement but may follow comments', () => {
 test('metadata name must be a string', () => {
   assert.throws(() => scriptModule.parseScript(`export const meta={name:1,description:'bad'}; return 1;`), /metadata/i);
 });
-test('metadata accepts bounded unique predeclared phases', () => {
+test('metadata preserves predeclared phase order and duplicate titles', () => {
   const parsed=scriptModule.parseScript(`export const meta={name:'phases',description:'Phases',phases:['Research','Review']}; return 1;`);
   assert.deepEqual(parsed.meta.phases,['Research','Review']);
-  assert.throws(()=>scriptModule.parseScript(`export const meta={name:'phases',description:'Phases',phases:['Same','Same']}; return 1;`),/phases/i);
+  assert.deepEqual(scriptModule.parseScript(`export const meta={name:'phases',description:'Phases',phases:['Same','Same']}; return 1;`).meta.phases,['Same','Same']);
 });
 test('fulfilled scripts still enforce timeout while detached calls drain', async () => {
   let release;

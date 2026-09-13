@@ -18,10 +18,13 @@ export function parseWorkflowMetadata(source) {
 }
 
 function literal(node) {
-  if (node.type === 'Literal' && (node.value === null || ['string', 'number', 'boolean'].includes(typeof node.value))) return node.value;
+  if (node.type === 'UnaryExpression' && node.operator === '-' && node.argument.type === 'Literal' && typeof node.argument.value === 'number') return -node.argument.value;
+  if (node.type === 'Literal') return node.value;
+  if (node.type === 'TemplateLiteral' && node.expressions.length === 0) return node.quasis.map(part => part.value.cooked ?? '').join('');
   if (node.type === 'ArrayExpression') return node.elements.map(literal);
   if (node.type === 'ObjectExpression') return Object.fromEntries(node.properties.map(p => {
     if (p.type !== 'Property' || p.computed || p.method || p.kind !== 'init') throw new Error('Metadata must contain literal properties');
+    if (['__proto__', 'constructor', 'prototype'].includes(String(p.key.name ?? p.key.value))) throw new Error('Reserved metadata key');
     return [p.key.name ?? p.key.value, literal(p.value)];
   }));
   throw new Error('Metadata must be literal data');
@@ -42,9 +45,27 @@ export function parseScript(source) {
     for (const value of Object.values(node)) if (Array.isArray(value)) value.forEach(walk); else if (value && typeof value === 'object') walk(value);
   };
   walk(tree);
-  const meta = literal(declaration.declarations[0].init);
-  if (!meta || typeof meta.name !== 'string' || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(meta.name) || typeof meta.description !== 'string' || !meta.description.trim() || meta.description.length > 1000) throw new Error('Invalid workflow metadata');
-  if(meta.phases!==undefined&&(!Array.isArray(meta.phases)||meta.phases.length>100||new Set(meta.phases).size!==meta.phases.length||meta.phases.some(name=>typeof name!=='string'||!name.trim()||name.length>200)))throw new Error('Invalid workflow phases');
+  const data = literal(declaration.declarations[0].init);
+  if (!data || typeof data.name !== 'string' || data.name.length === 0 || typeof data.description !== 'string' || data.description.length === 0) throw new Error('Invalid workflow metadata');
+  const meta = {
+    name: data.name,
+    description: data.description,
+    ...(typeof data.title === 'string' && data.title.length > 0 ? {title:data.title} : {}),
+    ...(typeof data.whenToUse === 'string' ? {whenToUse:data.whenToUse} : {}),
+  };
+  if (Array.isArray(data.phases)) {
+    // Retain legacy strings while matching the reference's object filtering.
+    const phases = data.phases.flatMap(phase => {
+      if (typeof phase === 'string') return [phase];
+      if (!phase || typeof phase !== 'object' || typeof phase.title !== 'string') return [];
+      return [{
+        title:phase.title,
+        ...(typeof phase.detail === 'string' ? {detail:phase.detail} : {}),
+        ...(typeof phase.model === 'string' ? {model:phase.model} : {}),
+      }];
+    });
+    if (phases.length > 0) meta.phases = phases;
+  }
   const body = source.slice(0, metadataExport.start) + source.slice(metadataExport.end);
   return { meta, body };
 }
