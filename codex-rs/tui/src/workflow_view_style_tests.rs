@@ -6,6 +6,37 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
 #[test]
+fn stopped_text_without_worker_columns_keeps_existing_style() {
+    let area = Rect::new(0, 0, 40, 1);
+    let mut buffer = Buffer::empty(area);
+    Paragraph::new(styled_lines(vec!["   │ │ x · stopped │".into()], None))
+        .render(area, &mut buffer);
+    assert_eq!(buffer[(9, 0)].fg, Color::Gray);
+}
+
+#[test]
+fn worker_selection_slot_and_stopped_separators_match_capture() {
+    let area = Rect::new(0, 0, 80, 1);
+    for (marker, metadata) in [("◌", "gpt-5 · stopped"), ("✔", "gpt-5 · 40.2k tok   7s")] {
+        let line = format!("   │ ❯ 1 Count  0/1 │  {marker} count        {metadata}     │");
+        let mut buffer = Buffer::empty(area);
+        Paragraph::new(styled_lines(vec![line], Some(12))).render(area, &mut buffer);
+        assert_eq!(buffer[(22, 0)].fg, Color::LightBlue);
+        for column in [24, 37] {
+            assert_eq!(buffer[(column, 0)].fg, Color::Reset, "{marker}: {column}");
+        }
+        assert_eq!(
+            buffer[(25, 0)].fg,
+            if marker == "◌" {
+                Color::Gray
+            } else {
+                Color::Reset
+            }
+        );
+    }
+}
+
+#[test]
 fn worker_duration_alignment_gap_is_plain() {
     let line = "   │   1 Count   │  ✔ count        gpt-5 · 40.2k tok        7s   │";
     let area = Rect::new(0, 0, 90, 1);
