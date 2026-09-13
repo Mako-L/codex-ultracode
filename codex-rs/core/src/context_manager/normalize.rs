@@ -1,6 +1,7 @@
 use codex_context_fragments::set_annotated_content;
 use codex_context_fragments::to_annotated_content;
 use codex_history::ResponseItemEnvelope;
+use codex_history::RolloutItem;
 use codex_protocol::ResponseItemId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -18,11 +19,42 @@ use tracing::info;
 // Changing this value would change model-visible IDs and invalidate prompt caches.
 const SYNTHETIC_OUTPUT_ID_NAMESPACE: Uuid = Uuid::from_u128(0x90d38d3e_6a5b_4d52_bfe2_2f1e634bfac4);
 
+#[derive(Clone, Copy)]
+enum OutputRepairContext {
+    Prompt,
+    InterruptedFork,
+}
+
 pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItemEnvelope>) {
+    let missing = missing_call_outputs(items.iter().enumerate(), OutputRepairContext::Prompt);
+    for (idx, output) in missing.into_iter().rev() {
+        items.insert(idx + 1, output);
+    }
+}
+
+/// Close pending calls in an interrupted child snapshot without changing its parent.
+pub(crate) fn complete_interrupted_tool_calls(items: &mut Vec<RolloutItem>) {
+    let responses = items
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, item)| match item {
+            RolloutItem::ResponseItem(envelope) => Some((idx, envelope)),
+            _ => None,
+        });
+    let missing = missing_call_outputs(responses, OutputRepairContext::InterruptedFork);
+    for (idx, output) in missing.into_iter().rev() {
+        items.insert(idx + 1, RolloutItem::ResponseItem(output));
+    }
+}
+
+fn missing_call_outputs<'a>(
+    items: impl Iterator<Item = (usize, &'a ResponseItemEnvelope)> + Clone,
+    context: OutputRepairContext,
+) -> Vec<(usize, ResponseItemEnvelope)> {
     let mut function_output_ids = HashSet::new();
     let mut tool_search_output_ids = HashSet::new();
     let mut custom_tool_output_ids = HashSet::new();
-    for envelope in items.iter() {
+    for (_, envelope) in items.clone() {
         match &envelope.item {
             ResponseItem::FunctionCallOutput {
                 call_id: Some(call_id),
@@ -48,7 +80,7 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItemEnvelope>)
     // we can insert in reverse order and avoid index shifting.
     let mut missing_outputs_to_insert: Vec<(usize, ResponseItemEnvelope)> = Vec::new();
 
-    for (idx, envelope) in items.iter().enumerate() {
+    for (idx, envelope) in items {
         match &envelope.item {
             ResponseItem::FunctionCall { id, call_id, .. }
                 if !function_output_ids.contains(call_id.as_str()) =>
@@ -87,9 +119,11 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItemEnvelope>)
             ResponseItem::CustomToolCall { id, call_id, .. }
                 if !custom_tool_output_ids.contains(call_id.as_str()) =>
             {
-                error_or_panic(format!(
-                    "Custom tool call output is missing for call id: {call_id}"
-                ));
+                if matches!(context, OutputRepairContext::Prompt) {
+                    error_or_panic(format!(
+                        "Custom tool call output is missing for call id: {call_id}"
+                    ));
+                }
                 missing_outputs_to_insert.push((
                     idx,
                     ResponseItemEnvelope::new(ResponseItem::CustomToolCallOutput {
@@ -107,9 +141,11 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItemEnvelope>)
                 call_id: Some(call_id),
                 ..
             } if !function_output_ids.contains(call_id.as_str()) => {
-                error_or_panic(format!(
-                    "Local shell call output is missing for call id: {call_id}"
-                ));
+                if matches!(context, OutputRepairContext::Prompt) {
+                    error_or_panic(format!(
+                        "Local shell call output is missing for call id: {call_id}"
+                    ));
+                }
                 missing_outputs_to_insert.push((
                     idx,
                     ResponseItemEnvelope::new(ResponseItem::FunctionCallOutput {
@@ -131,10 +167,7 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItemEnvelope>)
         custom_tool_output_ids,
     ));
 
-    // Insert synthetic outputs in reverse index order to avoid re-indexing.
-    for (idx, output_item) in missing_outputs_to_insert.into_iter().rev() {
-        items.insert(idx + 1, output_item);
-    }
+    missing_outputs_to_insert
 }
 
 /// Derives a stable ID for a prompt-only output from its source call's item ID.

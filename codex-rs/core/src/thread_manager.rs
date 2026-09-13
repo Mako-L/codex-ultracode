@@ -4,6 +4,7 @@ use crate::attestation::AttestationProvider;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
 use crate::config::ThreadStoreConfig;
+use crate::context_manager::complete_interrupted_tool_calls;
 use crate::current_time::TimeProvider;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::environment_selection::default_thread_environment_selections;
@@ -2351,6 +2352,7 @@ fn append_interrupted_boundary(
             InitialHistory::Forked(history)
         }
         InitialHistory::Forked(mut history) => {
+            complete_interrupted_tool_calls(&mut history);
             if let Some(marker) = interrupted_turn_history_marker(interrupted_marker) {
                 history.push(RolloutItem::ResponseItem(marker.into()));
             }
@@ -2359,6 +2361,7 @@ fn append_interrupted_boundary(
         }
         InitialHistory::Resumed(resumed) => {
             let mut history = Arc::unwrap_or_clone(resumed.history);
+            complete_interrupted_tool_calls(&mut history);
             if let Some(marker) = interrupted_turn_history_marker(interrupted_marker) {
                 history.push(RolloutItem::ResponseItem(marker.into()));
             }
