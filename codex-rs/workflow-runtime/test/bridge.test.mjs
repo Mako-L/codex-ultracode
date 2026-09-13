@@ -9,6 +9,7 @@ import {createBridgeServer,startBridge} from '../src/bridge/server.mjs';
 import {createNativeAdapter} from '../src/bridge/adapter.mjs';
 import {createPeer} from '../src/bridge/protocol.mjs';
 import {parseScript} from '../src/workflow/script.mjs';
+import {workflowConsentPresentation} from '../src/workflow/consent.mjs';
 import {requestControl} from '../src/workflow/store.mjs';
 
 const source=`export const meta={name:'native-probe',description:'Native probe'}; return await agent('hello',{isolation:'worktree'});`;
@@ -39,8 +40,9 @@ test('model catalog requires authoritative hello data',async()=>{
 
 test('source validation supplies consent metadata without launching or storing a run',async()=>{
   const f=await fixture();
-  const validated=await f.server.handle('validateSource',{source});
+  const validated=await f.server.handle('validateSource',{source,args:{ticket:4}});
   assert.deepEqual(validated.meta,parseScript(source).meta);assert.match(validated.digest,/^[a-f0-9]{64}$/);
+  assert.deepEqual(validated.consent,workflowConsentPresentation(source,{...parseScript(source),args:{ticket:4}}));
   assert.deepEqual(await f.server.handle('listRuns',{}),{runs:[]});assert.deepEqual(f.calls,[]);
   await assert.rejects(f.server.handle('validateSource',{source:source+' const invalid = ;'}),/Unexpected token/);
   assert.deepEqual(f.calls,[]);
