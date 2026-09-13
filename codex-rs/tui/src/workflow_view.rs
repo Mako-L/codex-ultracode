@@ -279,17 +279,30 @@ impl WorkflowView {
         }
         match key.code {
             KeyCode::Char('f')
-                if matches!(
-                    self.state.screen,
-                    WorkflowScreen::Overview | WorkflowScreen::Detail
-                ) =>
+                if self.state.screen == WorkflowScreen::Overview
+                    && self.state.focus == WorkflowFocus::Workers =>
             {
-                let i = FILTERS
+                let phase = self.phases().get(self.state.phase).cloned();
+                let filters: Vec<_> = FILTERS
+                    .into_iter()
+                    .filter(|status| {
+                        *status == "all"
+                            || self
+                                .run()
+                                .and_then(|run| run["workers"].as_array())
+                                .is_some_and(|workers| {
+                                    workers.iter().any(|worker| {
+                                        worker["phase"].as_str() == phase.as_deref()
+                                            && worker["status"].as_str() == Some(*status)
+                                    })
+                                })
+                    })
+                    .collect();
+                let i = filters
                     .iter()
                     .position(|v| *v == self.state.filter)
                     .unwrap_or(0);
-                self.state.filter = FILTERS[(i + 1) % FILTERS.len()].into();
-                self.state.focus = WorkflowFocus::Workers;
+                self.state.filter = filters[(i + 1) % filters.len()].into();
                 self.state.worker = 0;
                 self.state.scroll = 0;
             }
@@ -313,6 +326,9 @@ impl WorkflowView {
                 } else if self.state.screen == WorkflowScreen::Overview
                     && self.state.focus == WorkflowFocus::Phases
                 {
+                    if self.state.phase < self.phases().len().saturating_sub(1) {
+                        self.state.filter = "all".into();
+                    }
                     self.state.phase += 1
                 } else {
                     self.state.worker += 1
@@ -325,6 +341,9 @@ impl WorkflowView {
                 } else if self.state.screen == WorkflowScreen::Overview
                     && self.state.focus == WorkflowFocus::Phases
                 {
+                    if self.state.phase > 0 {
+                        self.state.filter = "all".into();
+                    }
                     self.state.phase = self.state.phase.saturating_sub(1)
                 } else {
                     self.state.worker = self.state.worker.saturating_sub(1)
@@ -1032,8 +1051,12 @@ fn render_overview(view: &WorkflowView, width: usize, height: usize) -> Vec<Stri
     } else {
         "↑↓ select".into()
     };
-    let filter = if view.state.filter == "all" {
+    let filter = if view.state.screen != WorkflowScreen::Overview
+        || view.state.focus != WorkflowFocus::Workers
+    {
         String::new()
+    } else if view.state.filter == "all" {
+        " · f filter".into()
     } else {
         format!(" · f filter: {}", view.state.filter)
     };
@@ -1442,6 +1465,49 @@ mod tests {
                 "{}",
                 case["capture"]
             );
+        }
+    }
+    #[test]
+    fn filter_key_matches_reference_focus_and_available_statuses() {
+        for status in ["completed", "failed"] {
+            let mut v = WorkflowView::new(
+                json!({"runs":[{"id":"reference","status":"completed","phases":["Count"],
+                    "workers":[{"id":"count","phase":"Count","status":status}]}]}),
+                None,
+            );
+            let initial = v.state.clone();
+            assert_eq!(v.handle_key(KeyEvent::from(KeyCode::Char('f'))), None);
+            assert_eq!(v.state, initial, "Phase focus ignores the filter key");
+            v.handle_key(KeyEvent::from(KeyCode::Enter));
+            assert!(text(&v, 160, 48).contains(" · f filter ·"));
+            v.handle_key(KeyEvent::from(KeyCode::Char('f')));
+            assert_eq!(v.state.filter, status);
+            v.handle_key(KeyEvent::from(KeyCode::Char('f')));
+            assert_eq!(v.state.filter, "all");
+            v.handle_key(KeyEvent::from(KeyCode::Enter));
+            let detail = v.state.clone();
+            v.handle_key(KeyEvent::from(KeyCode::Char('f')));
+            assert_eq!(v.state, detail, "Worker detail ignores the filter key");
+        }
+    }
+    #[test]
+    fn changing_phase_resets_worker_filter_like_reference() {
+        let mut v = WorkflowView::new(
+            json!({"runs":[{"id":"mixed","status":"completed","phases":["Count","Finish"],
+                "workers":[{"id":"count","phase":"Count","status":"completed"},
+                    {"id":"finish","phase":"Finish","status":"failed"}]}]}),
+            None,
+        );
+        v.handle_key(KeyEvent::from(KeyCode::Enter));
+        v.handle_key(KeyEvent::from(KeyCode::Char('f')));
+        for (key, status) in [(KeyCode::Down, "failed"), (KeyCode::Up, "completed")] {
+            v.handle_key(KeyEvent::from(KeyCode::Esc));
+            v.handle_key(KeyEvent::from(key));
+            assert_eq!(v.state.filter, "all");
+            assert_eq!(v.workers().len(), 1);
+            v.handle_key(KeyEvent::from(KeyCode::Enter));
+            v.handle_key(KeyEvent::from(KeyCode::Char('f')));
+            assert_eq!(v.state.filter, status);
         }
     }
     #[test]
