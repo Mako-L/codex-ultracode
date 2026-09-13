@@ -4,6 +4,20 @@ use futures::StreamExt;
 use pretty_assertions::assert_eq;
 use tokio_tungstenite::tungstenite::Message;
 
+// Tests provide their own engine fixtures; production resolves only packaged resources.
+fn install_fixture_node(root: &Path) {
+    let output = std::process::Command::new("node")
+        .args(["-p", "process.execPath"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let source = PathBuf::from(String::from_utf8(output.stdout).unwrap().trim());
+    let target = root.join(if cfg!(windows) { "node.exe" } else { "node" });
+    if std::fs::hard_link(&source, &target).is_err() {
+        std::fs::copy(source, target).unwrap();
+    }
+}
+
 #[derive(Clone, Copy)]
 enum CompletionOrder {
     Manual,
@@ -133,6 +147,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
 });"#).unwrap();
         std::fs::create_dir(directory.path().join("bin")).unwrap();
         std::fs::copy(&script, directory.path().join("bin/ultracode.mjs")).unwrap();
+        install_fixture_node(directory.path());
         let state = directory.path().join("state");
         let bridge = UltracodeBridge::spawn(BridgeLaunch {
             node: "node".into(),
@@ -651,6 +666,7 @@ async fn parent_creates_state_directory_before_bridge_spawn() {
         .unwrap()
         .replace("fs.mkdirSync(stateDir,{recursive:true});", "");
     std::fs::write(plugin_root.join("bin/ultracode.mjs"), bridge_script).unwrap();
+    install_fixture_node(&plugin_root);
 
     let parent_id = Uuid::new_v4().to_string();
     let parent = fixture
@@ -728,6 +744,7 @@ async fn parent_bridges_and_templates_use_their_explicit_plugin_roots() {
             root.join("bin/ultracode.mjs"),
         )
         .unwrap();
+        install_fixture_node(&root);
         roots.push(root.canonicalize().unwrap());
     }
     let parent_a_id = Uuid::new_v4().to_string();

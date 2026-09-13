@@ -644,13 +644,26 @@ async fn local_daemon_registers_approval_gated_mcp_tools_for_both_start_paths() 
         /*failed_thread_name*/ None,
     )
     .await?;
-    app_server
-        .start_dynamic_tool_mcp(
-            app.config.clone(),
-            app.app_event_tx.clone(),
-            app.dynamic_tool_status_updates.clone(),
-        )
-        .await?;
+    // Exercise direct MCP delegation and approval with the full tool inventory.
+    // Packaged live verification covers bundled workflow supervisor startup.
+    let server = crate::dynamic_tools_mcp::DynamicToolMcpServer::start(
+        app_server.request_handle(),
+        crate::app_server_session::thread_start_params_from_config(
+            &app.config,
+            app_server.thread_params_mode(),
+            app_server.remote_cwd_override(),
+            /*session_start_source*/ None,
+        ),
+        app.app_event_tx.clone(),
+        app.dynamic_tool_status_updates.clone(),
+        /*managed_requirement*/ None,
+        /*workflow_handler*/ None,
+        /*workflows_enabled*/ true,
+    )
+    .await?;
+    app_server = app_server.with_thread_tool_transport(
+        crate::dynamic_tools_mcp::ThreadToolTransport::Mcp(Arc::new(server)),
+    );
 
     let started = app_server.start_thread(&app.config).await?;
     let thread_id = started.session.thread_id;
@@ -911,6 +924,7 @@ async fn local_daemon_registers_approval_gated_mcp_tools_for_both_start_paths() 
 async fn local_mcp_respects_configured_servers_and_managed_requirements() -> Result<()> {
     for scenario in ["conflicting", "blocked", "mismatched", "allowed"] {
         let (mut app, _codex_home) = make_history_test_app().await?;
+        app.config.disable_workflows = true;
         if scenario == "conflicting" {
             let raw = serde_json::from_value::<codex_config::RawMcpServerConfig>(
                 serde_json::json!({"url": "http://127.0.0.1:1/mcp", "enabled": false}),

@@ -2,6 +2,7 @@
 
 import os
 import platform
+import shutil
 import stat
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,6 +14,7 @@ if _repo_root is None:
         "run `just assemble-codex-package` to set it automatically"
     )
 REPO_ROOT = Path(_repo_root)
+WORKFLOW_RUNTIME_SOURCE_DIR = REPO_ROOT / "codex-rs" / "workflow-runtime"
 
 
 @dataclass(frozen=True)
@@ -30,6 +32,10 @@ class TargetSpec:
     def rg_name(self) -> str:
         return f"rg{self.exe_suffix}"
 
+    @property
+    def node_name(self) -> str:
+        return f"node{self.exe_suffix}"
+
 
 @dataclass(frozen=True)
 class PackageVariant:
@@ -45,6 +51,8 @@ class PackageVariant:
 class PackageInputs:
     entrypoint_bin: Path
     code_mode_host_bin: Path
+    workflow_runtime_dir: Path
+    node_bin: Path
     rg_bin: Path
     zsh_bin: Path | None
     bwrap_bin: Path | None
@@ -155,6 +163,19 @@ def resolve_input_path(
         return path
 
     raise RuntimeError(f"Must specify {flag_name} for {description}.")
+
+
+def resolve_node_bin(spec: TargetSpec, explicit_path: Path | None) -> Path:
+    if explicit_path is None:
+        if spec.target != default_target():
+            raise RuntimeError(
+                f"Must specify --node-bin for non-host target {spec.target}."
+            )
+        node_path = shutil.which("node")
+        if node_path is None:
+            raise RuntimeError("Must specify --node-bin; node was not found on PATH.")
+        explicit_path = Path(node_path)
+    return resolve_input_path(explicit_path, "Node executable", "--node-bin")
 
 
 def is_executable(path: Path) -> bool:

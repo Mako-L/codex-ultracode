@@ -155,17 +155,14 @@ impl Runtime {
                 "parent thread ID must be a canonical UUID",
             ));
         }
-        if !plugin_root.is_absolute() {
-            return Err(BridgeError::host("plugin root must be absolute"));
-        }
-        let root = plugin_root
-            .canonicalize()
+        let runtime = crate::workflow_runtime::WorkflowRuntime::from_root(plugin_root)
             .map_err(|error| BridgeError::host(error.to_string()))?;
+        let root = runtime.root;
         let mut parents = self.parents.lock().await;
         if let Some(parent) = parents.get(parent_id) {
             if parent.plugin_root != root {
                 return Err(BridgeError::host(
-                    "parent workflow runtime belongs to a different plugin root",
+                    "parent workflow runtime belongs to a different bundled workflow runtime",
                 ));
             }
             return Ok(parent.clone());
@@ -185,8 +182,8 @@ impl Runtime {
         std::fs::create_dir_all(&directory)
             .map_err(|error| BridgeError::host(error.to_string()))?;
         let bridge = UltracodeBridge::spawn(BridgeLaunch {
-            node: "node".into(),
-            script: root.join("bin/ultracode.mjs"),
+            node: runtime.node,
+            script: runtime.script,
             plugin_root: root.clone(),
             cwd: authority.cwd.into(),
             state_dir: directory.clone(),
@@ -350,9 +347,11 @@ impl Runtime {
     ) -> Result<Value, BridgeError> {
         let root = params["pluginRoot"]
             .as_str()
-            .ok_or_else(|| BridgeError::host("frontend plugin root is unavailable"))?;
+            .ok_or_else(|| BridgeError::host("frontend bundled workflow runtime is unavailable"))?;
         if !Path::new(root).is_absolute() {
-            return Err(BridgeError::host("plugin root must be absolute"));
+            return Err(BridgeError::host(
+                "bundled workflow runtime root must be absolute",
+            ));
         }
         let plugin_root = Path::new(root)
             .canonicalize()
@@ -471,7 +470,7 @@ impl WorkflowMcpHandler for WorkflowFrontend {
             let parent = runtime.parents.lock().await.get(&params.thread_id).cloned();
             let Some(parent) = parent.filter(|parent| parent.plugin_root == plugin_root) else {
                 return crate::dynamic_tools::failure_response(
-                    "Workflow launch requires an attached native frontend using the same plugin root for consent.",
+                    "Workflow launch requires an attached native frontend using the same bundled workflow runtime for consent.",
                 );
             };
             let receiver = {

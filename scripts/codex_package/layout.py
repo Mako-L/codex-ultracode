@@ -10,6 +10,9 @@ from .targets import PackageVariant
 from .targets import TargetSpec
 from .zsh import ZSH_RESOURCE_PATH
 
+WORKFLOW_RUNTIME_RESOURCE_DIR = Path("workflow-runtime")
+WORKFLOW_RUNTIME_ENTRYPOINT = WORKFLOW_RUNTIME_RESOURCE_DIR / "bin" / "ultracode.mjs"
+
 
 LAYOUT_VERSION = 1
 
@@ -65,6 +68,27 @@ def build_package_dir(
             is_windows=False,
         )
 
+    workflow_runtime_dir = resources_dir / WORKFLOW_RUNTIME_RESOURCE_DIR
+    if not inputs.workflow_runtime_dir.is_dir():
+        raise RuntimeError(
+            f"Workflow runtime source does not exist: {inputs.workflow_runtime_dir}"
+        )
+    for directory_name in ("bin", "src", "node_modules"):
+        shutil.copytree(
+            inputs.workflow_runtime_dir / directory_name,
+            workflow_runtime_dir / directory_name,
+        )
+    for file_name in ("package.json", "package-lock.json"):
+        shutil.copyfile(
+            inputs.workflow_runtime_dir / file_name,
+            workflow_runtime_dir / file_name,
+        )
+    copy_executable(
+        inputs.node_bin,
+        workflow_runtime_dir / spec.node_name,
+        is_windows=spec.is_windows,
+    )
+
     if inputs.bwrap_bin is not None:
         copy_executable(inputs.bwrap_bin, resources_dir / "bwrap", is_windows=False)
 
@@ -105,6 +129,9 @@ def validate_package_dir(
         Path("bin"),
         Path("codex-resources"),
         Path("codex-path"),
+        Path("codex-resources") / WORKFLOW_RUNTIME_RESOURCE_DIR,
+        Path("codex-resources") / WORKFLOW_RUNTIME_RESOURCE_DIR / "src",
+        Path("codex-resources") / WORKFLOW_RUNTIME_RESOURCE_DIR / "node_modules",
     ]
     for relative_dir in required_dirs:
         path = package_dir / relative_dir
@@ -137,8 +164,17 @@ def validate_package_dir(
         Path("bin") / variant.entrypoint_name(spec),
         Path("bin") / f"codex-code-mode-host{spec.exe_suffix}",
         Path("codex-path") / spec.rg_name,
+        Path("codex-resources") / WORKFLOW_RUNTIME_ENTRYPOINT,
+        Path("codex-resources") / WORKFLOW_RUNTIME_RESOURCE_DIR / "package.json",
+        Path("codex-resources") / WORKFLOW_RUNTIME_RESOURCE_DIR / "package-lock.json",
+        Path("codex-resources") / WORKFLOW_RUNTIME_RESOURCE_DIR / spec.node_name,
     ]
-    executable_files = list(required_files)
+    executable_files = [
+        Path("bin") / variant.entrypoint_name(spec),
+        Path("bin") / f"codex-code-mode-host{spec.exe_suffix}",
+        Path("codex-path") / spec.rg_name,
+        Path("codex-resources") / WORKFLOW_RUNTIME_RESOURCE_DIR / spec.node_name,
+    ]
 
     if include_zsh:
         zsh_path = Path("codex-resources") / ZSH_RESOURCE_PATH

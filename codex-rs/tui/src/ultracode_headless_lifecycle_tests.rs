@@ -412,6 +412,13 @@ async fn headless_socket_requires_its_listener_root_parent_and_mode() {
 async fn headless_connection_cannot_adopt_parent_from_another_plugin_root() {
     let fixture = Fixture::new(CompletionOrder::Manual).await;
     let other_root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(other_root.path().join("bin")).unwrap();
+    std::fs::copy(
+        fixture.parent.plugin_root.join("bin/ultracode.mjs"),
+        other_root.path().join("bin/ultracode.mjs"),
+    )
+    .unwrap();
+    install_fixture_node(other_root.path());
     let (client, connection) = fixture.connect(None).await;
     let mcp = configure_headless(&client, other_root.path()).await;
     fixture.parent_listeners.lock().unwrap().insert(
@@ -428,7 +435,7 @@ async fn headless_connection_cannot_adopt_parent_from_another_plugin_root() {
             .await
             .unwrap_err()
             .message
-            .contains("different plugin root")
+            .contains("different bundled workflow runtime")
     );
     assert!(fixture.runtime.headless_parents.lock().unwrap().is_empty());
     connection.abort();
