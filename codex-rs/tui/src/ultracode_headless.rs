@@ -44,6 +44,7 @@ pub async fn prepare(
             "a user-configured MCP server already owns the codex_tui namespace",
         ));
     }
+    let root = crate::workflow_runtime::WorkflowRuntime::bundled()?.root;
     let socket_path = codex_app_server_daemon::ensure_workflow_backend(
         &config.codex_home,
         &std::env::current_exe()?,
@@ -51,10 +52,6 @@ pub async fn prepare(
     .await
     .map_err(io::Error::other)?;
     let socket_path = codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(socket_path)?;
-    let root = std::env::var_os("ULTRACODE_PLUGIN_ROOT")
-        .or_else(|| std::env::var_os("CODEX_PLUGIN_ROOT"))
-        .ok_or_else(|| io::Error::other("frontend plugin root is unavailable"))?;
-    let root = std::path::PathBuf::from(root).canonicalize()?;
     let supervisor = crate::ultracode_host::connect(&config.codex_home).await?;
     let mcp = supervisor.request("configure", json!({"threadStartParams":thread_start_params,"pluginRoot":root,"frontend":"headless"}), Duration::from_secs(30))
         .await.map_err(io::Error::other)?;

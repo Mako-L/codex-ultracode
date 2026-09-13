@@ -227,6 +227,7 @@ mod unarchive_prompt;
 pub(crate) mod update_action;
 mod workflow_advisory;
 pub(crate) mod workflow_consent;
+mod workflow_runtime;
 pub(crate) mod workflow_view;
 mod workflow_view_style;
 pub use update_action::UpdateAction;

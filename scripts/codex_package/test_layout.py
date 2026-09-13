@@ -27,6 +27,7 @@ class PackageLayoutTest(unittest.TestCase):
                         zsh_bin = touch_executable(root / "signed-zsh")
                         rg_bin.write_bytes(b"signed ripgrep binary")
                         zsh_bin.write_bytes(b"signed zsh binary")
+                        workflow_runtime_dir = make_workflow_runtime(root)
                         variant = PACKAGE_VARIANTS[variant_name]
                         spec = TARGET_SPECS[target]
                         inputs = PackageInputs(
@@ -36,6 +37,8 @@ class PackageLayoutTest(unittest.TestCase):
                             code_mode_host_bin=touch_executable(
                                 root / "codex-code-mode-host"
                             ),
+                            workflow_runtime_dir=workflow_runtime_dir,
+                            node_bin=touch_executable(root / "node"),
                             rg_bin=rg_bin,
                             zsh_bin=zsh_bin,
                             bwrap_bin=None,
@@ -73,6 +76,8 @@ class PackageLayoutTest(unittest.TestCase):
             inputs = PackageInputs(
                 entrypoint_bin=touch_executable(root / "codex-app-server"),
                 code_mode_host_bin=touch_executable(root / "codex-code-mode-host"),
+                workflow_runtime_dir=make_workflow_runtime(root),
+                node_bin=touch_executable(root / "node"),
                 rg_bin=touch_executable(root / "rg"),
                 zsh_bin=None,
                 bwrap_bin=touch_executable(root / "bwrap"),
@@ -95,11 +100,47 @@ class PackageLayoutTest(unittest.TestCase):
             )
 
             self.assertTrue((package_dir / "bin" / "codex-code-mode-host").is_file())
+            self.assertTrue(
+                (
+                    package_dir
+                    / "codex-resources"
+                    / "workflow-runtime"
+                    / "bin"
+                    / "ultracode.mjs"
+                ).is_file()
+            )
+            self.assertFalse(
+                (
+                    package_dir
+                    / "codex-resources"
+                    / "workflow-runtime"
+                    / ".codex-plugin"
+                ).exists()
+            )
+            self.assertFalse(
+                (
+                    package_dir / "codex-resources" / "workflow-runtime" / "skills"
+                ).exists()
+            )
 
 
 def touch_executable(path: Path) -> Path:
     path.touch(mode=0o755)
     return path
+
+
+def make_workflow_runtime(root: Path) -> Path:
+    runtime = root / "workflow-runtime"
+    (runtime / "bin").mkdir(parents=True)
+    (runtime / "src").mkdir()
+    (runtime / "node_modules").mkdir()
+    (runtime / "bin" / "ultracode.mjs").write_text("runtime", encoding="utf-8")
+    (runtime / "src" / "runtime.mjs").write_text("runtime", encoding="utf-8")
+    (runtime / "package.json").write_text("{}\n", encoding="utf-8")
+    (runtime / "package-lock.json").write_text("{}\n", encoding="utf-8")
+    (runtime / ".codex-plugin").mkdir()
+    (runtime / "skills").mkdir()
+    return runtime
 
 
 if __name__ == "__main__":

@@ -509,11 +509,7 @@ impl AppServerSession {
             /*session_start_source*/ None,
         );
         #[cfg(unix)]
-        if !config.disable_workflows
-            && !self.uses_remote_workspace()
-            && (std::env::var_os("ULTRACODE_PLUGIN_ROOT").is_some()
-                || std::env::var_os("CODEX_PLUGIN_ROOT").is_some())
-        {
+        if !config.disable_workflows && !self.uses_remote_workspace() {
             self.dynamic_tool_mcp = Some(Arc::new(
                 DynamicToolMcpServer::connect_supervisor(
                     &config.codex_home,

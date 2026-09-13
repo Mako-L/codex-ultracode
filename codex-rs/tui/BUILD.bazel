@@ -6,6 +6,7 @@ codex_rust_crate(
         "assets/**",
         "frames/**",
         "src/workflow_view_test/**",
+        "src/workflow_instructions.md",
     ]),
     crate_name = "codex_tui",
     extra_binaries = [

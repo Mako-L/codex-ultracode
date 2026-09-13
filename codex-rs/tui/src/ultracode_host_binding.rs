@@ -14,7 +14,9 @@ pub(super) struct HeadlessBinding {
 impl HeadlessBinding {
     pub(super) fn new(connection_id: Uuid, plugin_root: &Path) -> Result<Self, BridgeError> {
         if !plugin_root.is_absolute() {
-            return Err(BridgeError::host("plugin root must be absolute"));
+            return Err(BridgeError::host(
+                "bundled workflow runtime root must be absolute",
+            ));
         }
         Ok(Self {
             connection_id,

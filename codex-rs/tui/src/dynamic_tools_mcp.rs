@@ -120,11 +120,8 @@ impl DynamicToolMcpServer {
         events: AppEventSender,
         managed_requirement: Option<&McpServerRequirement>,
     ) -> std::io::Result<Self> {
+        let plugin_root = crate::workflow_runtime::WorkflowRuntime::bundled()?.root;
         let supervisor = crate::ultracode_host::connect(home).await?;
-        let plugin_root = std::env::var_os("ULTRACODE_PLUGIN_ROOT")
-            .or_else(|| std::env::var_os("CODEX_PLUGIN_ROOT"))
-            .ok_or_else(|| std::io::Error::other("frontend plugin root is unavailable"))?;
-        let plugin_root = std::path::PathBuf::from(plugin_root).canonicalize()?;
         let config = supervisor
             .request(
                 "configure",

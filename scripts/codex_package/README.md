@@ -24,7 +24,14 @@ The builder creates a canonical Codex package directory:
 │   ├── bwrap                             # Linux only
 │   ├── zsh/bin/zsh                       # supported Unix targets only
 │   ├── codex-command-runner.exe          # Windows only
-│   └── codex-windows-sandbox-setup.exe   # Windows only
+│   ├── codex-windows-sandbox-setup.exe   # Windows only
+│   └── workflow-runtime                  # Codex-owned workflow engine
+│       ├── bin/ultracode.mjs
+│       ├── src/
+│       ├── package.json
+│       ├── package-lock.json
+│       ├── node_modules/
+│       └── node[.exe]
 └── codex-path
     └── rg[.exe]
 ```

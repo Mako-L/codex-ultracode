@@ -63,10 +63,8 @@ impl App {
         if let Some(session) = self.workflow_sessions.get(session_key) {
             return Ok(session.bridge.clone());
         }
-        let plugin_root = std::env::var_os("ULTRACODE_PLUGIN_ROOT")
-            .or_else(|| std::env::var_os("CODEX_PLUGIN_ROOT"))
-            .map(PathBuf::from)
-            .ok_or_else(|| color_eyre::eyre::eyre!("Ultracode plugin root is unavailable"))?;
+        let runtime = crate::workflow_runtime::WorkflowRuntime::bundled()?;
+        let plugin_root = runtime.root;
         #[cfg(unix)]
         let supervised = app_server.workflow_host_enabled();
         #[cfg(not(unix))]
@@ -83,8 +81,8 @@ impl App {
             }
         } else {
             crate::ultracode_bridge::UltracodeBridge::spawn(crate::ultracode_bridge::BridgeLaunch {
-                node: "node".into(),
-                script: plugin_root.join("bin/ultracode.mjs"),
+                node: runtime.node,
+                script: runtime.script,
                 plugin_root,
                 cwd: authority.cwd.clone().into(),
                 state_dir: workflow_state_dir(

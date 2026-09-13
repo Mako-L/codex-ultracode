@@ -1,7 +1,11 @@
 """Command-line interface for building Codex package directories."""
 
 import argparse
+from collections.abc import Iterator
+from contextlib import contextmanager
 import re
+import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -14,8 +18,11 @@ from .ripgrep import resolve_rg_bin
 from .targets import PACKAGE_VARIANTS
 from .targets import TARGET_SPECS
 from .targets import PackageInputs
+from .targets import TargetSpec
 from .targets import default_target
 from .targets import resolve_input_path
+from .targets import resolve_node_bin
+from .targets import WORKFLOW_RUNTIME_SOURCE_DIR
 from .zsh import resolve_zsh_bin
 from .version import read_workspace_version
 
@@ -106,6 +113,19 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--npm",
+        default="npm",
+        help="Npm executable used to install workflow runtime dependencies.",
+    )
+    parser.add_argument(
+        "--node-bin",
+        type=Path,
+        help=(
+            "Optional prebuilt Node executable bundled with workflow runtime. "
+            "Required for non-host targets."
+        ),
+    )
+    parser.add_argument(
         "--entrypoint-bin",
         type=Path,
         help=(
@@ -183,6 +203,8 @@ def main() -> int:
         else Path(tempfile.mkdtemp(prefix="codex-package-")).resolve()
     )
 
+    node_bin = resolve_node_bin(spec, args.node_bin)
+    validate_node_bin(spec, node_bin)
     source_outputs = build_source_binaries(
         spec,
         variant,
@@ -214,28 +236,75 @@ def main() -> int:
             "--codex-windows-sandbox-setup-bin",
         ),
     )
-    inputs = PackageInputs(
-        entrypoint_bin=source_outputs.entrypoint_bin,
-        code_mode_host_bin=source_outputs.code_mode_host_bin,
-        rg_bin=resolve_rg_bin(spec, args.rg_bin),
-        zsh_bin=resolve_zsh_bin(spec, args.zsh_manifest, zsh_bin=args.zsh_bin),
-        bwrap_bin=source_outputs.bwrap_bin,
-        codex_command_runner_bin=source_outputs.codex_command_runner_bin,
-        codex_windows_sandbox_setup_bin=source_outputs.codex_windows_sandbox_setup_bin,
-    )
-    prepare_package_dir(package_dir, force=args.force)
-    build_package_dir(package_dir, args.package_version, variant, spec, inputs)
-    validate_package_dir(
-        package_dir, variant, spec, include_zsh=inputs.zsh_bin is not None
-    )
+    with prepare_workflow_runtime(
+        WORKFLOW_RUNTIME_SOURCE_DIR,
+        npm=args.npm,
+    ) as workflow_runtime_dir:
+        inputs = PackageInputs(
+            entrypoint_bin=source_outputs.entrypoint_bin,
+            code_mode_host_bin=source_outputs.code_mode_host_bin,
+            workflow_runtime_dir=workflow_runtime_dir,
+            node_bin=node_bin,
+            rg_bin=resolve_rg_bin(spec, args.rg_bin),
+            zsh_bin=resolve_zsh_bin(spec, args.zsh_manifest, zsh_bin=args.zsh_bin),
+            bwrap_bin=source_outputs.bwrap_bin,
+            codex_command_runner_bin=source_outputs.codex_command_runner_bin,
+            codex_windows_sandbox_setup_bin=source_outputs.codex_windows_sandbox_setup_bin,
+        )
+        prepare_package_dir(package_dir, force=args.force)
+        build_package_dir(package_dir, args.package_version, variant, spec, inputs)
+        validate_package_dir(
+            package_dir, variant, spec, include_zsh=inputs.zsh_bin is not None
+        )
 
-    for archive_output in args.archive_output:
-        archive_path = archive_output.resolve()
-        write_archive(package_dir, archive_path, force=args.force)
-        print(f"Built Codex package archive at {archive_path}")
+        for archive_output in args.archive_output:
+            archive_path = archive_output.resolve()
+            write_archive(package_dir, archive_path, force=args.force)
+            print(f"Built Codex package archive at {archive_path}")
 
-    print(f"Built Codex package directory at {package_dir}")
+        print(f"Built Codex package directory at {package_dir}")
     return 0
+
+
+@contextmanager
+def prepare_workflow_runtime(source_dir: Path, *, npm: str) -> Iterator[Path]:
+    if not source_dir.is_dir():
+        raise RuntimeError(f"Workflow runtime source does not exist: {source_dir}")
+    with tempfile.TemporaryDirectory(prefix="codex-workflow-runtime-") as staging_root:
+        staged_dir = Path(staging_root) / source_dir.name
+        for directory_name in ("bin", "src"):
+            shutil.copytree(source_dir / directory_name, staged_dir / directory_name)
+        for file_name in ("package.json", "package-lock.json"):
+            shutil.copyfile(source_dir / file_name, staged_dir / file_name)
+        subprocess.run([npm, "ci", "--ignore-scripts"], cwd=staged_dir, check=True)
+        yield staged_dir
+
+
+def validate_node_bin(spec: TargetSpec, node_bin: Path) -> None:
+    if spec.target != default_target():
+        return
+    with tempfile.TemporaryDirectory(prefix="codex-node-preflight-") as staging_root:
+        staged_node = Path(staging_root) / spec.node_name
+        shutil.copy2(node_bin, staged_node)
+        try:
+            result = subprocess.run(
+                [staged_node, "--version"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except (OSError, subprocess.CalledProcessError) as error:
+            raise RuntimeError(
+                f"Node executable cannot run after relocation: {node_bin}. "
+                "Use a self-contained --node-bin."
+            ) from error
+    version = result.stdout.strip()
+    match = re.match(r"^v?(\d+)(?:\.|$)", version)
+    if match is None or int(match.group(1)) < 24:
+        raise RuntimeError(
+            f"Node executable must be version 24 or newer: {node_bin}. "
+            "Use --node-bin with a supported Node executable."
+        )
 
 
 def resolve_optional_input_path(

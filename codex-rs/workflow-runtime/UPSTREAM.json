@@ -1,0 +1,23 @@
+{
+  "source": "https://github.com/Gabriel-Macovei/ultracode",
+  "commit": "0a1b086",
+  "note": "Initial import of the existing engine and its focused tests. This copy is owned and built by Codex; no plugin checkout or installation is required.",
+  "files": {
+    "test/bridge-protocol.test.mjs": "350692661bd4f0873e2494143ea9dd056fabe80a17c741f6ae0572385a1a64bf",
+    "src/bridge/protocol.mjs": "fdd8e3c72ed97623bb317def8969c92bc3e784281ee1870b08aa354b3d421ec2",
+    "test/bridge.test.mjs": "83576aa61a1b999066e84137586c44e317aa1789c0e185b596a5256e924e45f2",
+    "src/workflow/store.mjs": "e67cbe33d45cd2d4420fa8205a7693dc18ab9f8bc92bf658d5c536d8656f9251",
+    "src/workflow/script.mjs": "8e27457ecc667efbbf10d92683301fd0ee5acb80a817e54a272df0ce3116804c",
+    "src/bridge/adapter.mjs": "9132cf00bc75103e78b78ada6635670d9ae144232a4e42d67f3b4228d9f8539e",
+    "src/bridge/server.mjs": "b4c12df790c3986d0b7914c0ebfad4ac6acff7af36e5910a4a78bf8c6cd1ef28",
+    "src/workflow/catalog.mjs": "86ceb31ec3ed0bb72d3afb1e46a3c3c2def8da091975d801c78bd263e1d13ea6",
+    "src/workflow/runtime.mjs": "bb8c1c73fe111fdc3dabb696d917f590b0916186666b109cccee5021eb281e6c",
+    "src/codex/client.mjs": "850847c5d0223047dd9dc1d6bb1aa6583995033765ee1e6042dc22497101cf03",
+    "src/workflow/approvals.mjs": "e50e74eb3442ac684fceaa03144af6edcc6047044d2aef95fb239cc938f28370",
+    "src/codex/roles.mjs": "971bff3b97fd71fd759bc31b0742b66a9f0bbcaacccee4685a7b318a0f17cd5e",
+    "src/codex/permissions.mjs": "f4475a4f910fcf796bfe6f5c99c5f4c63bfba782dca377de540635f92ec80835",
+    "src/workflow/prefix-stagger.mjs": "9f2b96dd43401ec7afa4f43df3834be71e973b5281f50bf60b437c89879e95f5",
+    "test/script.test.mjs": "4942aa79d5da2fbd27c5c9ca1e733253d733c1f69cd8757d7789a2b0d354e9ae",
+    "test/runtime.test.mjs": "40fa81fa4d15217e6ba64ce48c3c7fb7d000b7405c9eaddf3f4091399042ed21"
+  }
+}

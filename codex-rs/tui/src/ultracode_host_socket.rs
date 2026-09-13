@@ -286,7 +286,7 @@ pub(super) async fn serve(
             if method == "configure" {
                 if configured || parent_id.is_some() { return Err(io::Error::other("frontend connection is already configured or attached")); }
                 let selected_headless = if params["frontend"] == "headless" {
-                    let root = params["pluginRoot"].as_str().ok_or_else(|| io::Error::other("missing frontend plugin root"))?;
+                    let root = params["pluginRoot"].as_str().ok_or_else(|| io::Error::other("missing frontend bundled workflow runtime"))?;
                     Some(Arc::new(HeadlessBinding::new(connection_id,Path::new(root)).map_err(io::Error::other)?))
                 } else { None };
                 let response = match runtime.configure(params,selected_headless.clone()).await {
@@ -304,7 +304,7 @@ pub(super) async fn serve(
                     // This socket already authenticated and bound this parent/root pair.
                     runtime.parents.lock().await.get(requested_parent).cloned().ok_or_else(|| io::Error::other("parent runtime unavailable"))?
                 } else {
-                    let plugin_root = params["pluginRoot"].as_str().ok_or_else(|| io::Error::other("missing frontend plugin root"))?;
+                    let plugin_root = params["pluginRoot"].as_str().ok_or_else(|| io::Error::other("missing frontend bundled workflow runtime"))?;
                     runtime.parent(requested_parent, Path::new(plugin_root)).await.map_err(io::Error::other)?
                 };
                 let _access = parent.frontend_access.lock().await;

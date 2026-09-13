@@ -249,7 +249,7 @@ pub(crate) fn tool_specs() -> Vec<DynamicToolSpec> {
     })];
     specs.push(DynamicToolSpec::Function(DynamicToolFunctionSpec {
         name: "workflow".into(),
-        description: "Launch or resume a user-requested Ultracode workflow after native validation and consent. Returns immediately with a workflow run ID, not a worker thread ID. Completion arrives automatically as a typed workflow.completion message; acknowledge launch and finish the current turn. This tool does not accept polling or wait actions.".into(),
+        description: crate::workflow_runtime::INSTRUCTIONS.into(),
         // Keep shared properties visible to code-mode renderers that prioritize unions over siblings.
         input_schema: json!({
             "type":"object",
