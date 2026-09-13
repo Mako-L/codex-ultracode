@@ -160,6 +160,16 @@ pub(crate) fn styled_lines(
                     } else {
                         cell
                     };
+                    let cell = if column == 2
+                        && worker_label_width.is_some()
+                        && cell.starts_with(' ')
+                        && cell.trim_start().starts_with(['✔', '✘', '✻', 'Ⅱ', '◌'])
+                    {
+                        spans.push(Span::styled(" ", plain.fg(Color::LightBlue)));
+                        &cell[1..]
+                    } else {
+                        cell
+                    };
                     if column == 1
                         && let Some(separator) = cell
                             .strip_prefix("❯ ")
@@ -202,7 +212,20 @@ pub(crate) fn styled_lines(
                         spans.push(Span::raw(cell[leading + content.len()..].to_owned()));
                     } else if column == 2 && cell.contains(" · stopped") {
                         let content = cell.trim_end_matches(' ');
-                        spans.extend(symbols(content, gray));
+                        let mut start = 0;
+                        for (offset, symbol) in content.char_indices() {
+                            let width = UnicodeWidthStr::width(&content[..offset]);
+                            if symbol == ' '
+                                && worker_label_width.is_some()
+                                && (width == 1
+                                    || Some(width) == worker_label_width.map(|width| width + 2))
+                            {
+                                spans.extend(symbols(&content[start..offset], gray));
+                                spans.push(Span::raw(" "));
+                                start = offset + 1;
+                            }
+                        }
+                        spans.extend(symbols(&content[start..], gray));
                         spans.push(Span::raw(cell[content.len()..].to_owned()));
                     } else if column == 1 {
                         let count = cell.split_whitespace().last().unwrap_or_default();
