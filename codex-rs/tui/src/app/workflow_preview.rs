@@ -1,3 +1,4 @@
+use super::workflow_consent_render::workflow_preview_header;
 use super::*;
 use crate::app_event::WorkflowConsentChoice;
 use crate::app_event::WorkflowConsentContext;
@@ -5,7 +6,6 @@ use crate::app_event::WorkflowConsentFeedbackState;
 use crate::app_event::WorkflowEvent;
 use crate::app_event::WorkflowPreviewMode;
 use crate::render::renderable::ColumnRenderable;
-use crate::ultracode_source::WorkflowPhase;
 use crate::ultracode_source::WorkflowSourcePreview;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
@@ -39,7 +39,13 @@ impl App {
         let validated = bridge
             .request(
                 "validateSource",
-                serde_json::json!({"source": preview.source}),
+                {
+                    let mut params = serde_json::json!({"source": preview.source});
+                    if let Some(args) = arguments.get("args") {
+                        params["args"] = args.clone();
+                    }
+                    params
+                },
                 std::time::Duration::from_secs(30),
             )
             .await
@@ -55,6 +61,11 @@ impl App {
         preview.metadata = Some(
             serde_json::from_value(validated["meta"].clone())
                 .map_err(|error| color_eyre::eyre::eyre!("Invalid workflow metadata: {error}"))?,
+        );
+        preview.consent = Some(
+            serde_json::from_value(validated["consent"].clone()).map_err(|error| {
+                color_eyre::eyre::eyre!("Invalid workflow presentation: {error}")
+            })?,
         );
         Ok(preview)
     }
@@ -99,11 +110,18 @@ impl App {
         preview: WorkflowSourcePreview,
         mut mode: WorkflowPreviewMode,
     ) {
-        if preview.validation_error.is_some() {
+        let has_summary = preview.consent.as_ref().is_some_and(|consent| {
+            consent
+                .phases
+                .as_ref()
+                .is_some_and(|phases| !phases.is_empty())
+                && !consent.source.withheld
+        });
+        if preview.validation_error.is_some() || !has_summary {
             mode = WorkflowPreviewMode::Raw;
         }
         let title = "Run a dynamic workflow?".to_string();
-        let remember_name = match &consent {
+        let mut remember_name = match &consent {
             WorkflowConsentContext::Dynamic { params, .. } if preview.workflow_id.is_some() => {
                 params
                     .arguments
@@ -117,6 +135,12 @@ impl App {
             }
             WorkflowConsentContext::Saved { .. } => None,
         };
+
+        if preview.consent.as_ref().is_none_or(|consent| {
+            consent.source.withheld || consent.args.as_ref().is_some_and(|args| args.withheld)
+        }) {
+            remember_name = None;
+        }
 
         let send_choice = |choice| {
             let consent = consent.clone();
@@ -160,7 +184,12 @@ impl App {
 
         let feedback = feedback_state.snapshot();
 
-        let validation_error = preview.validation_error.clone();
+        let validation_error = preview.validation_error.clone().or_else(|| {
+            preview
+                .consent
+                .as_ref()
+                .and_then(|consent| consent.source.withheld.then(|| consent.source.text.clone()))
+        });
         let mut items = vec![SelectionItem {
             name: "Yes, run it".into(),
             is_disabled: validation_error.is_some(),
@@ -192,13 +221,13 @@ impl App {
                     self.config.cwd.display()
                 )),
                 is_disabled: validation_error.is_some(),
-                disabled_reason: validation_error,
+                disabled_reason: validation_error.clone(),
                 actions: vec![send_plain_choice(WorkflowConsentChoice::Remember)],
                 dismiss_on_select: true,
                 ..Default::default()
             });
         }
-        if preview.metadata.is_some() {
+        if has_summary && validation_error.is_none() {
             let next_mode = match mode {
                 WorkflowPreviewMode::Summary => WorkflowPreviewMode::Raw,
                 WorkflowPreviewMode::Raw => WorkflowPreviewMode::Summary,
@@ -290,60 +319,6 @@ impl App {
             ..Default::default()
         });
     }
-}
-
-fn workflow_preview_header(
-    preview: &WorkflowSourcePreview,
-    mode: WorkflowPreviewMode,
-) -> Box<dyn crate::render::renderable::Renderable> {
-    let lines = match mode {
-        WorkflowPreviewMode::Summary => {
-            let Some(metadata) = &preview.metadata else {
-                return Box::new(());
-            };
-            let display_title = metadata
-                .title
-                .as_deref()
-                .filter(|title| !title.trim().is_empty())
-                .unwrap_or(&metadata.name);
-            let mut lines = vec![
-                vec!["Workflow ".dim(), sanitize_display(display_title).bold()].into(),
-                sanitize_display(&metadata.description).into(),
-            ];
-            if !metadata.phases.is_empty() {
-                lines.push(Line::default());
-                lines.push("Phases".bold().into());
-                for (index, phase) in metadata.phases.iter().enumerate() {
-                    let (title, detail) = match phase {
-                        WorkflowPhase::Name(title) => (title, None),
-                        WorkflowPhase::Detailed { title, detail } => (title, detail.as_ref()),
-                    };
-                    lines.push(format!("{}. {}", index + 1, sanitize_display(title)).into());
-                    if let Some(detail) = detail {
-                        lines.push(vec!["   ".into(), sanitize_display(detail).dim()].into());
-                    }
-                }
-            }
-            lines
-        }
-        WorkflowPreviewMode::Raw => {
-            let mut lines = Vec::new();
-            if let Some(error) = &preview.validation_error {
-                lines.push(
-                    vec![
-                        "Validation error: ".red().bold(),
-                        sanitize_display(error).red(),
-                    ]
-                    .into(),
-                );
-                lines.push(Line::default());
-            }
-            let source = sanitize_display(&preview.source);
-            lines.extend(source.lines().map(|line| line.to_owned().into()));
-            lines
-        }
-    };
-    Box::new(Paragraph::new(lines).wrap(Wrap { trim: false }))
 }
 
 fn sanitize_display(text: &str) -> String {

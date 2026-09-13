@@ -4,8 +4,10 @@ expression: "render_bottom_popup(&app.chat_widget, 100)"
 ---
   Run a dynamic workflow?
 
-  Workflow saved-proof
   Run a saved proof workflow.
+
+  This dynamic workflow will spin up multiple subagents across the following phases:
+    1. Run
 
   You can stop a running workflow at any time with /workflows, or disable dynamic workflows in
   /config.

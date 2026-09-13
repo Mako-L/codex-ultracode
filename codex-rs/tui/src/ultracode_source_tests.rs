@@ -8,6 +8,7 @@ fn saved_preview() -> WorkflowSourcePreview {
         digest: format!("{:x}", Sha256::digest(b"original script")),
         workflow_id: Some("saved-identity".into()),
         metadata: None,
+        consent: None,
         validation_error: None,
         resolved_path: None,
         resume_run_id: None,

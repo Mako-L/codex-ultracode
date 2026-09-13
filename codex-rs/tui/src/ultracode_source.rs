@@ -27,10 +27,41 @@ pub(crate) struct WorkflowSourcePreview {
     pub(crate) digest: String,
     pub(crate) workflow_id: Option<String>,
     pub(crate) metadata: Option<WorkflowMetadata>,
+    pub(crate) consent: Option<WorkflowConsentPresentation>,
     pub(crate) validation_error: Option<String>,
     resolved_path: Option<String>,
     resume_run_id: Option<String>,
     saved_name: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub(crate) struct WorkflowConsentPresentation {
+    pub(crate) phases: Option<Vec<WorkflowConsentPhase>>,
+    pub(crate) args: Option<WorkflowConsentArgs>,
+    pub(crate) source: WorkflowConsentSource,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub(crate) struct WorkflowConsentPhase {
+    pub(crate) title: String,
+    pub(crate) detail: Option<String>,
+    pub(crate) prompts: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WorkflowConsentArgs {
+    pub(crate) text: String,
+    pub(crate) needs_gutter: bool,
+    pub(crate) withheld: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WorkflowConsentSource {
+    pub(crate) text: String,
+    pub(crate) withheld: bool,
+    pub(crate) original_length: usize,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -113,6 +144,7 @@ impl WorkflowSourcePreview {
             digest: format!("{:x}", Sha256::digest(source.as_bytes())),
             workflow_id: None,
             metadata: None,
+            consent: None,
             validation_error: None,
             resolved_path: None,
             resume_run_id: arguments
@@ -241,6 +273,7 @@ pub(crate) async fn read_preview(
             digest,
             workflow_id,
             metadata: None,
+            consent: None,
             validation_error: None,
             resolved_path,
             resume_run_id: arguments

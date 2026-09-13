@@ -4,12 +4,12 @@ expression: popup
 ---
   Run a dynamic workflow?
 
-  Workflow Preview workflow
   Preview the selected workflow source.
 
-  Phases
-  1. Inspect
-     Read the selected bytes.
+  This dynamic workflow will spin up multiple subagents across the following phases:
+    1. Inspect — Read selected bytes.
+
+  args: original args
 
   You can stop a running workflow at any time with /workflows, or disable dynamic workflows in
   /config.

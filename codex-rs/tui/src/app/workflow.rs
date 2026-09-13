@@ -354,7 +354,10 @@ impl App {
                             preview: None,
                         }));
                 } else {
-                    let arguments = serde_json::json!({"name":name});
+                    let mut arguments = serde_json::json!({"name":name});
+                    if let Some(args) = &args {
+                        arguments["args"] = serde_json::Value::String(args.clone());
+                    }
                     let preview = self
                         .prepare_workflow_preview(app_server, &key, &arguments)
                         .await?;
