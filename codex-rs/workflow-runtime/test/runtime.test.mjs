@@ -62,7 +62,7 @@ test('custom role preparation preserves parallel order and invalidates replay on
   assert.equal(changed.status,'completed');assert.ok(changed.workers.every(w=>!w.cached));assert.equal(starts.length,4);
 });
 test('controls received during role preparation cannot be discarded by cached replay',async t=>{
-  for(const control of ['stop','restart','pause'])await t.test(control,async()=>{
+  for(const control of ['stop','pause'])await t.test(control,async()=>{
     const f=await fixture();let block=false,release,requested=false,starts=0;
     f.client.resolveRole=async()=>{if(block)await new Promise(resolve=>{release=resolve;});return {name:'custom',digest:'same-role',config:{}};};
     f.client.run=async()=>{starts++;return {output:'cached-result'};};
@@ -74,8 +74,7 @@ test('controls received during role preparation cannot be discarded by cached re
       if(worker?.stopRequested||worker?.restart){if(release){const done=release;release=null;done();}}
     }});
     assert.notEqual(resumed.workers[0].cached,true);
-    if(control==='restart'){assert.equal(starts,2);assert.equal(resumed.workers[0].status,'completed');}
-    else{assert.equal(starts,1);assert.equal(resumed.workers[0].status,control==='pause'?'stopped':'failed');}
+    assert.equal(starts,1);assert.equal(resumed.workers[0].status,control==='pause'?'stopped':'failed');
   });
 });
 test('a paused run can be stopped without a live supervisor',async()=>{
@@ -786,6 +785,145 @@ test('normalizes App Server token usage while preserving raw evidence', async ()
   assert.deepEqual(run.workers[0].usage,{totalTokens:9,inputTokens:7,outputTokens:2,modelContextWindow:380000});
   assert.equal(run.workers[0].rawUsage.last.totalTokens,9);
 });
+test('worker restart admission requires a selected running attempt',async()=>{
+  const f=await fixture(),id='restart-admission';
+  for(const status of ['preparing','queued','completed','failed','stopped','interrupted']){
+    store.writeRun(f.stateDir,{id,status:'running',attempt:3,workers:[{id:'worker-1',status,attempt:2}]});
+    assert.throws(()=>store.requestControl(f.stateDir,id,{type:'restart',workerId:'worker-1'}),/Only a running worker/);
+    assert.equal(store.consumeControl(f.stateDir,id),null);
+  }
+  store.writeRun(f.stateDir,{id,status:'running',attempt:3,workers:[{id:'worker-1',status:'running',attempt:2}]});
+  assert.throws(()=>store.requestControl(f.stateDir,id,{type:'restart',workerId:'missing'}),/Unknown worker/);
+  store.requestControl(f.stateDir,id,{type:'restart',workerId:'worker-1',workerAttempt:99,runAttempt:99});
+  const {id:commandId,...command}=store.consumeControl(f.stateDir,id);
+  assert.ok(commandId);assert.deepEqual(command,{type:'restart',workerId:'worker-1',workerAttempt:2,runAttempt:3});
+});
+
+test('repeated worker restarts preserve the call and accumulate snapshots once', {timeout:5000}, async t=>{
+  const f=await fixture();let clock=1000,starts=0,prepares=0,releases=0;
+  t.mock.method(Date,'now',()=>clock);
+  const requests=[],observed=[],restarted=new Set();
+  const nativeWorkspace={prepare:async()=>{prepares++;return {workspaceId:'workspace',cwd:f.cwd,isolated:true,authorityGeneration:1,roleDigest:'role'};},release:async()=>{releases++;}};
+  const item=id=>({id:String(id),type:'commandExecution'});
+  f.client.run=async options=>{
+    requests.push(options);const attempt=++starts;
+    clock+=10;
+    const identity={threadId:`thread-${attempt}`,turnId:`turn-${attempt}`,status:'running'};
+    const activity=attempt===1?Array.from({length:128},(_,i)=>item(i)):[item(0)];
+    options.onUpdate({...identity,usage:{total:{totalTokens:attempt*10},modelContextWindow:1000},activity});
+    const capped=attempt===1?Array.from({length:128},(_,i)=>item(i+2)):activity;
+    options.onUpdate({...identity,usage:{total:{totalTokens:attempt*10},modelContextWindow:1000},activity:capped});
+    options.onUpdate({...identity,usage:{total:{totalTokens:attempt*10},modelContextWindow:1000},activity:capped});
+    if(attempt<3){
+      await new Promise(resolve=>options.signal.addEventListener('abort',resolve,{once:true}));
+      clock+=20;
+      options.onUpdate({...identity,status:'interrupted',usage:{total:{totalTokens:attempt*10+5},modelContextWindow:2000},activity:[item(attempt===1?'final':1),{id:'text',type:'agentMessage'}]});
+      throw new Error('Native worker interrupted');
+    }
+    clock+=20;return {...identity,status:'completed',output:'done',usage:{total:{totalTokens:30},modelContextWindow:3000},activity};
+  };
+  const run=await runtime.runWorkflow({...f,nativeWorkspace,authorityRef:'auth',authorityDigest:'digest',prefixStaggerMs:0,source:source('return await agent("repeat",{label:"Original",model:"gpt-5.6-luna",effort:"low",isolation:"worktree"});'),onUpdate:state=>{
+    const worker=state.workers[0];if(!worker?.startedAt)return;
+    observed.push(worker);
+    if(worker.status==='running'&&worker.turnId&&worker.attempt<3&&!restarted.has(worker.attempt)){
+      restarted.add(worker.attempt);store.requestControl(f.stateDir,state.id,{type:'restart',workerId:worker.id});
+    }
+  }});
+  assert.equal(run.status,'completed',run.error);assert.equal(run.result,'done');
+  const worker=run.workers[0];
+  assert.deepEqual({attempt:worker.attempt,reason:worker.lastAttemptReason,usage:worker.usage,toolCalls:worker.toolCalls,durationMs:worker.durationMs},{attempt:3,reason:'user-retry',usage:{totalTokens:70,modelContextWindow:3000},toolCalls:134,durationMs:90});
+  assert.deepEqual(worker.rawUsage,{total:{totalTokens:30},modelContextWindow:3000});
+  assert.equal(worker.durationUpdatedAt,new Date(clock).toISOString());
+  assert.equal(new Set(observed.map(worker=>worker.startedAt)).size,1);
+  assert.deepEqual(requests.map(({prompt,model,effort,cwd,workspace,threadId})=>({prompt,model,effort,cwd,workspace,threadId})),Array.from({length:3},()=>({prompt:'repeat',model:'gpt-5.6-luna',effort:'low',cwd:f.cwd,workspace:worker.workspace,threadId:undefined})));
+  assert.equal(new Set(requests.map(request=>request.signal)).size,3);assert.equal(prepares,1);assert.equal(releases,1);
+});
+
+test('schema repair replaces same-thread totals and sums distinct threads',async t=>{
+  for(const freshThread of [false,true])await t.test(String(freshThread),async()=>{
+    const f=await fixture();let starts=0;
+    f.client.run=async options=>{
+      const attempt=++starts,threadId=freshThread?`thread-${attempt}`:'thread';
+      const result={threadId,turnId:`turn-${attempt}`,status:'completed',output:attempt===1?'invalid':42,usage:{total:{totalTokens:attempt*10}},activity:[{id:'command',type:'commandExecution'}]};
+      options.onUpdate(result);return result;
+    };
+    const run=await runtime.runWorkflow({...f,source:source('return await agent("structured",{schema:{type:"number"}});')});
+    assert.equal(run.status,'completed');assert.equal(starts,2);assert.equal(run.workers[0].attempt,1);
+    assert.deepEqual(run.workers[0].usage,{totalTokens:freshThread?30:20});assert.equal(run.workers[0].toolCalls,freshThread?2:1);
+  });
+});
+
+test('recovery resumes the interrupted thread once before a fresh user restart', {timeout:5000}, async()=>{
+  const f=await fixture(),threads=[];let starts=0,requested=false;
+  f.client.run=async options=>{
+    const start=++starts;threads.push(options.threadId);
+    const threadId=start<3?'recovered-thread':'fresh-thread';
+    const snapshot={threadId,turnId:`turn-${start}`,status:'running',usage:{total:{totalTokens:start*10}},activity:[{id:'command',type:'commandExecution'}]};
+    options.onUpdate(snapshot);
+    if(start===1)throw new Error('connection closed');
+    if(start===2){await new Promise(resolve=>options.signal.addEventListener('abort',resolve,{once:true}));options.onUpdate({...snapshot,status:'interrupted'});throw new Error('Native worker interrupted');}
+    return {...snapshot,status:'completed',output:'recovered'};
+  };
+  const first=await runtime.runWorkflow({...f,source:source('return await agent("same");'),prefixStaggerMs:0});
+  assert.equal(first.status,'interrupted');
+  const resumed=await runtime.runWorkflow({...f,runId:first.id,resume:true,prefixStaggerMs:0,onUpdate:state=>{
+    const worker=state.workers[0];
+    if(worker?.status==='running'&&worker.turnId==='turn-2'&&!requested){requested=true;store.requestControl(f.stateDir,state.id,{type:'restart',workerId:worker.id});}
+  }});
+  assert.equal(resumed.status,'completed',resumed.error);assert.equal(resumed.uncertainWorkers,false);
+  assert.deepEqual(threads,[undefined,'recovered-thread',undefined]);
+  assert.equal(resumed.workers[0].attempt,2);assert.equal(resumed.workers[0].startedAt,first.workers[0].startedAt);
+  assert.deepEqual(resumed.workers[0].usage,{totalTokens:50});assert.equal(resumed.workers[0].toolCalls,2);
+});
+
+test('recovery retains unresolved identity through prelaunch failure and early restart', {timeout:5000}, async()=>{
+  const f=await fixture();let starts=0,requested=false;
+  f.client.run=async options=>{
+    starts++;
+    if(starts===1){options.onUpdate({threadId:'original',turnId:'original-turn',usage:{total:{totalTokens:10}}});throw new Error('connection closed');}
+    assert.equal(options.threadId,'original');
+    if(starts===2)throw Object.assign(new Error('role unavailable'),{code:'INVALID_WORKER_CONFIGURATION'});
+    await new Promise(resolve=>setTimeout(resolve,60));
+    assert.equal(options.signal.aborted,false,'restart must not replace recovery before its identity is acknowledged');
+    return {threadId:'original',turnId:'recovered-turn',status:'completed',usage:{total:{totalTokens:20}},output:'done'};
+  };
+  const first=await runtime.runWorkflow({...f,source:source('return await agent("same");'),prefixStaggerMs:0});
+  const failed=await runtime.runWorkflow({...f,runId:first.id,resume:true,prefixStaggerMs:0});
+  assert.equal(failed.status,'interrupted');assert.equal(failed.workers[0].threadId,'original');
+  assert.deepEqual(failed.workers[0].usage,{totalTokens:10});
+  const recovered=await runtime.runWorkflow({...f,runId:first.id,resume:true,prefixStaggerMs:0,onUpdate:state=>{
+    const worker=state.workers[0];
+    if(worker?.status==='running'&&!requested){requested=true;store.requestControl(f.stateDir,state.id,{type:'restart',workerId:worker.id});}
+  }});
+  assert.equal(recovered.status,'completed',recovered.error);assert.equal(starts,3);
+  assert.equal(recovered.workers[0].attempt,1);assert.deepEqual(recovered.workers[0].usage,{totalTokens:20});
+});
+
+test('worker restart consumption ignores commands for stale attempts and terminal targets', {timeout:5000}, async()=>{
+  const f=await fixture();let starts=0;
+  const controlFile=id=>path.join(store.runDirectory(f.stateDir,id),'control.json');
+  f.client.run=async options=>{
+    starts++;options.onUpdate({threadId:`thread-${starts}`,turnId:'turn',status:'running'});
+    if(options.prompt==='first'){
+      store.requestControl(f.stateDir,options.runId,{type:'restart',workerId:options.workerId});
+      return {output:'first',status:'completed'};
+    }
+    await new Promise(resolve=>setTimeout(resolve,50));
+    assert.equal(options.signal.aborted,false,'a completed target must not restart its sibling');
+    for(const command of [
+      {type:'restart',workerId:options.workerId,runAttempt:99,workerAttempt:1},
+      {type:'restart',workerId:options.workerId,runAttempt:1,workerAttempt:99},
+      {type:'restart',workerId:'missing',runAttempt:1,workerAttempt:1},
+    ]){
+      await writeFile(controlFile(options.runId),JSON.stringify(command));await new Promise(resolve=>setTimeout(resolve,40));
+      assert.equal(options.signal.aborted,false);
+    }
+    return {output:'second',status:'completed'};
+  };
+  const run=await runtime.runWorkflow({...f,prefixStaggerMs:0,source:source('await agent("first");return await agent("second");')});
+  assert.equal(run.status,'completed');assert.equal(starts,2);assert.ok(run.workers.every(worker=>worker.attempt===1));
+});
+
 test('workflow timeout stops active workers before returning', async () => {
   const f=await fixture();
   let started=false,stopped=false;

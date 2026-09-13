@@ -103,6 +103,12 @@ export function requestControl(stateDir,id,command) {
   }
   if(['pause','stop'].includes(command.type)&&state.status!=='running')throw new Error(`Cannot ${command.type} terminal run ${id}`);
   if(command.type==='restart'&&state.status!=='running')throw new Error(`Terminal run ${id} must be restarted by a new supervisor`);
+  if(command.type==='restart'&&command.workerId) {
+    const worker=state.workers.find(worker=>worker.id===command.workerId);
+    if(!worker)throw new Error('Unknown worker');
+    if(worker.status!=='running'||worker.restart||worker.stopRequested)throw new Error('Only a running worker can be restarted');
+    command={...command,runAttempt:state.attempt??1,workerAttempt:worker.attempt??1};
+  }
   atomicJSON(path.join(runDirectory(stateDir,id),'control.json'),{...command,id:randomUUID()});
 }
 export function consumeControl(stateDir,id) {
