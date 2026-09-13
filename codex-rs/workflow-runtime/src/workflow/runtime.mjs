@@ -16,6 +16,10 @@ const allowedOptions=new Set(['label','phase','model','effort','schema','write',
 const builtInAgentTypes=new Set(['general-purpose','Explore','Plan']);
 const normalizeUsage=usage=>usage?.total?{...usage.total,...(usage.modelContextWindow==null?{}:{modelContextWindow:usage.modelContextWindow})}:usage;
 const normalizeWorkerStatus=status=>['starting','inProgress'].includes(status)?'running':status;
+const tokenCounters=['inputTokens','cachedInputTokens','outputTokens','reasoningOutputTokens','totalTokens'];
+const actionableItems=new Set(['commandExecution','fileChange','mcpToolCall','dynamicToolCall','collabAgentToolCall','webSearch','imageView','sleep','imageGeneration']);
+const tokenUsage=usage=>Object.fromEntries(tokenCounters.filter(key=>Number.isFinite(usage?.[key])&&usage[key]>=0).map(key=>[key,usage[key]]));
+const sumUsage=usages=>usages.reduce((total,usage)=>{for(const [key,value] of Object.entries(tokenUsage(usage)))total[key]=(total[key]??0)+value;return total;},{});
 function permissionEnvelope(requested={sandbox:'read-only',approvalPolicy:'never'}, previous) {
   if(!sandboxWithinCeiling(requested.sandbox,'danger-full-access')||!supportedApprovalPolicy(requested.approvalPolicy))throw new Error('Unsupported permission envelope');
   if(previous&&!sandboxWithinCeiling(requested.sandbox,previous.sandbox))throw new Error('Cannot widen persisted permission ceiling on resume');
@@ -108,7 +112,12 @@ export async function runWorkflow(options) {
       if(command.workerId) {
         const worker=state.workers.find(w=>w.id===command.workerId);
         if(worker) {
-          if(command.type==='restart')worker.restart=true;
+          if(command.type==='restart') {
+            if(worker.status!=='running'||worker.restart||worker.stopRequested||!active.has(worker.id)||active.get(worker.id).signal.aborted
+              ||command.runAttempt!==state.attempt||command.workerAttempt!==worker.attempt
+              ||(pendingRecovery.has(worker.id)&&!worker.turnId))return;
+            worker.restart=true;
+          }
           else worker.stopRequested=true;
           if(active.has(worker.id))active.get(worker.id).abort();
           if(command.type!=='restart')preparationStops.get(worker.id)?.abort(new Error('Worker stopped'));
@@ -247,6 +256,34 @@ export async function runWorkflow(options) {
       const details={signature,status:'queued',...(options.nativeWorkspace?{readOnly,workspace:{workspaceId:workspace.workspaceId,cwd:workspace.cwd,isolated:workspace.isolated,baseCommit:workspace.baseCommit??null,roleDigest:workspace.roleDigest},workspaceId:workspace.workspaceId,authorityGeneration:workspace.authorityGeneration,roleDigest:workspace.roleDigest,...(workspace.baseCommit?{baseCommit:workspace.baseCommit}:{}),...(workspace.isolated?{worktree:workspace.cwd}:{})}:{sandbox,...(recoverable&&cached.worktree?{worktree:cached.worktree,baseCommit:cached.baseCommit}:{})})};
       if(worker)Object.assign(worker,details);else{worker={id:workerId,label:workerOptions.label??`Agent ${index+1}`,phase:workerPhase,agentType,isolation:isolated?'worktree':null,prompt,model,effort,options:workerOptions,activity:[],...details};state.workers.push(worker);}
       if(!state.phases.some(p=>p.name===workerPhase))state.phases.push({name:workerPhase});
+      let recoverThread=recoverable&&cached.status==='interrupted'?cached.threadId:undefined;
+      worker.attempt=recoverThread?(cached.attempt??1):1;
+      if(recoverThread)for(const key of ['startedAt','lastAttemptReason','usage','rawUsage','toolCalls','durationMs','accounting'])if(cached[key]!==undefined)worker[key]=structuredClone(cached[key]);
+      worker.accounting??={priorUsage:{},priorToolCalls:0,usageByThread:recoverThread&&worker.usage?{[recoverThread]:tokenUsage(worker.usage)}:{},toolCallIds:[]};
+      const seenItems=new Set(worker.accounting.toolCallIds);
+      let durationTick;
+      const account=update=>{
+        const accounting=worker.accounting;
+        const thread=update.threadId??worker.threadId??`attempt-${worker.attempt}`;
+        if(update.usage!=null){worker.rawUsage=update.usage;accounting.usageByThread[thread]=tokenUsage(normalizeUsage(update.usage));}
+        if(Array.isArray(update.activity))for(const item of update.activity){
+          if(typeof item?.id==='string'&&actionableItems.has(item.type))seenItems.add(`${thread}\0${item.id}`);
+        }
+        accounting.toolCallIds=[...seenItems];
+        worker.toolCalls=accounting.priorToolCalls+seenItems.size;
+        const usage=sumUsage([accounting.priorUsage,...Object.values(accounting.usageByThread)]);
+        const contextWindow=normalizeUsage(worker.rawUsage)?.modelContextWindow;
+        if(Object.keys(usage).length)worker.usage={...usage,...(contextWindow==null?{}:{modelContextWindow:contextWindow})};
+        const timestamp=Date.now();
+        worker.durationMs=(worker.durationMs??0)+(durationTick===undefined?0:Math.max(0,timestamp-durationTick));
+        worker.durationUpdatedAt=new Date(timestamp).toISOString();durationTick=timestamp;
+      };
+      const updateWorker=update=>{
+        const {usage,...fields}=update;
+        Object.assign(worker,Object.fromEntries(Object.entries(fields).filter(([,value])=>value!==undefined)));
+        if(update.status!==undefined){worker.rawStatus=update.status;worker.status=normalizeWorkerStatus(update.status);}
+        account(update);
+      };
       save();
       const operation=(async()=>{
         if(running>=concurrency)await new Promise(resolve=>queue.push(resolve));
@@ -256,10 +293,16 @@ export async function runWorkflow(options) {
         try {
           const adapter=await connected();
           do {
+            if(worker.restart){
+              worker.attempt++;worker.lastAttemptReason='user-retry';
+              worker.accounting={priorUsage:tokenUsage(worker.usage),priorToolCalls:worker.toolCalls,usageByThread:{},toolCallIds:[]};seenItems.clear();
+              delete worker.threadId;delete worker.sessionId;delete worker.turnId;delete worker.rawStatus;
+              delete worker.text;delete worker.output;delete worker.error;worker.activity=[];
+            }
             worker.restart=false;worker.stopRequested=false;
             aborter=new AbortController();active.set(worker.id,aborter);
             if(controller.signal.aborted)aborter.abort();
-            worker.status='running';worker.startedAt=now();worker.launchIntent=true;save();
+            durationTick=Date.now();worker.status='running';worker.startedAt??=now();worker.launchIntent=true;account({});save();
             let workerCwd=workspace?.cwd??cwd;
             if(!options.nativeWorkspace&&isolated&&!worker.worktree) {
               workerCwd=path.join(runDirectory(stateDir,id),`worktree-${index+1}${old?`-attempt-${state.attempt}`:''}`);
@@ -273,22 +316,23 @@ export async function runWorkflow(options) {
               prefixToken=await prefixStagger.enter(prefixKey,{signal:aborter.signal});
               if(state.launchCount>=1000)throw new Error('Total worker launch limit is 1000');
               state.launchCount++;save();
-              const recoverThread=recoverable&&cached.status==='interrupted'?cached.threadId:undefined;
               let threadId=recoverThread;
+              recoverThread=undefined;
               let result;
               const attempts=validate?structuredOutputAttempts():1;
               worker.validationAttempts=[];
               for(let attempt=1;attempt<=attempts;attempt++) {
                 const repair=attempt===1?prompt:`Repair the previous response to satisfy the output schema. Return only the corrected structured output. Validation error: ${worker.validationAttempts.at(-1).error}`;
-                worker.launchIntent=true;delete worker.turnId;save();
+                worker.status='running';worker.launchIntent=true;delete worker.turnId;save();
                 try {
-                  result=await adapter.run({runId:id,workerId:worker.id,authorityRef:options.authorityRef,authorityDigest:options.authorityDigest,authorityGeneration:workspace?.authorityGeneration,prompt:repair,model,effort,modelExplicit,effortExplicit,cwd:workerCwd,...(options.nativeWorkspace?{readOnly}:{sandbox,resolvedRole,approvalPolicy:permission.approvalPolicy,onApproval:request=>requestApproval({...request,stateDir,runId:id,attempt:state.attempt,workerId:worker.id})}),schema:workerOptions.schema,agentType,workspace:worker.workspace,signal:aborter.signal,threadId,timeoutMs:options.timeoutMs,onUpdate:update=>{if(update.firstResponseStarted)prefixStagger.started(prefixToken);Object.assign(worker,update,{rawStatus:update.status,status:normalizeWorkerStatus(update.status)});if(update.usage?.total){worker.rawUsage=update.usage;worker.usage=normalizeUsage(update.usage);}if(update.turnId)worker.launchIntent=false;save();}});
+                  result=await adapter.run({runId:id,workerId:worker.id,authorityRef:options.authorityRef,authorityDigest:options.authorityDigest,authorityGeneration:workspace?.authorityGeneration,prompt:repair,model,effort,modelExplicit,effortExplicit,cwd:workerCwd,...(options.nativeWorkspace?{readOnly}:{sandbox,resolvedRole,approvalPolicy:permission.approvalPolicy,onApproval:request=>requestApproval({...request,stateDir,runId:id,attempt:state.attempt,workerId:worker.id})}),schema:workerOptions.schema,agentType,workspace:worker.workspace,signal:aborter.signal,threadId,timeoutMs:options.timeoutMs,onUpdate:update=>{if(update.firstResponseStarted)prefixStagger.started(prefixToken);updateWorker(update);if(update.turnId)worker.launchIntent=false;save();}});
                 } catch(error) {
                   if(error.code!=='INVALID_STRUCTURED_OUTPUT')throw error;
                   worker.validationAttempts.push({attempt,error:error.message});threadId=error.threadId??threadId;save();
                   if(attempt===attempts)throw error;
                   continue;
                 }
+                updateWorker(result);
                 threadId=result.threadId??threadId;
                 const output=result.output??result.text;
                 if(!validate||validate(output))break;
@@ -299,15 +343,16 @@ export async function runWorkflow(options) {
               }
               const output=result.output??result.text;
               pendingRecovery.delete(worker.id);state.uncertainWorkers=pendingRecovery.size>0;
-              Object.assign(worker,result,{output,status:'completed',launchIntent:false});
-              if(result.usage?.total){worker.rawUsage=result.usage;worker.usage=normalizeUsage(result.usage);}
+              updateWorker({...result,output,status:'completed',launchIntent:false});
               delete worker.error;
             } catch(error) {
               worker.status=controller.signal.aborted?'stopped':'failed';worker.error=error.message;worker.output=null;
               if(!/unresolved|not confirmed|disconnect|connection closed/i.test(error.message))worker.launchIntent=false;
               if(/unresolved|not confirmed|disconnect|connection closed/i.test(error.message)) {state.uncertainWorkers=true;worker.status='interrupted';worker.restart=false;pendingRecovery.set(worker.id,{...worker});}
+              else if(['completed','interrupted','failed'].includes(worker.rawStatus)){pendingRecovery.delete(worker.id);state.uncertainWorkers=pendingRecovery.size>0;}
+              if(pendingRecovery.has(worker.id))worker.restart=false;
               if(['INVALID_STRUCTURED_OUTPUT','INVALID_WORKER_CONFIGURATION'].includes(error.code))throw error;
-            } finally {prefixStagger.finish(prefixToken);}
+            } finally {prefixStagger.finish(prefixToken);account({});durationTick=undefined;if(pendingRecovery.has(worker.id)&&worker.status==='interrupted')pendingRecovery.set(worker.id,{...worker});}
           } while(worker.restart&&!controller.signal.aborted);
           worker.endedAt=now();save();return worker.output??null;
         } finally {

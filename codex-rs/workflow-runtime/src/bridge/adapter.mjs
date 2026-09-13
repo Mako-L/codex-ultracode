@@ -30,8 +30,18 @@ export function createNativeAdapter({host}) {
         let result;
         try {result=await host.request('worker.start',{runId:options.runId,workerId:options.workerId,authorityRef:options.authorityRef,authorityDigest:options.authorityDigest,authorityGeneration:options.authorityGeneration,prompt:options.prompt,model:options.model??null,effort:options.effort??null,modelExplicit:options.modelExplicit===true,effortExplicit:options.effortExplicit===true,agentType:options.agentType,readOnly:options.readOnly,schema:options.schema??null,workspace:options.workspace,resumeThreadId:options.threadId??null},{timeoutMs:options.timeoutMs??null});}
         catch(error){throw error?.outcomeUnresolved?unresolved(error):error;}
+        // A short turn can finish before the first progress event supplies its
+        // identity. Cancellation must still cross the exact-turn close barrier.
+        entry.threadId=result?.threadId??entry.threadId;entry.turnId=result?.turnId??entry.turnId;
+        // Final snapshots can contain accounting absent from progress events, even
+        // when interruption fails. Preserve it before enforcing the close barrier.
+        if(result&&(result.status!=='completed'||entry.signal?.aborted))entry.onUpdate?.(result);
+        interrupt(entry);
+        if(entry.signal?.aborted&&!entry.interruptPromise)throw unresolved(new Error('Native worker interruption identity unavailable'));
+        // Hosts reject interruption after completion. Keep that outcome unresolved
+        // with the terminal identity above so explicit resume can recover it.
         if(entry.interruptPromise)try{await entry.interruptPromise;}catch(error){throw unresolved(error);}
-        if(result?.status==='interrupted')throw new Error(result.error??'Native worker interrupted');
+        if(entry.signal?.aborted||result?.status==='interrupted')throw new Error(result?.error??'Native worker interrupted');
         if(result?.status!=='completed')throw new Error(result?.error??`Native worker ${result?.status??'failed'}`);
         return result;
       } finally {options.signal?.removeEventListener('abort',abort);active.delete(identity);}

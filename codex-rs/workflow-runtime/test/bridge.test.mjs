@@ -289,6 +289,90 @@ for(const scope of ['worker','run'])test(`native ${scope} restart cannot relaunc
   assert.equal(state.workers[0].status,'interrupted');
 });
 
+test('native adapter forwards final interrupted accounting before a failed acknowledgement', {timeout:5000}, async()=>{
+  const controller=new AbortController(),updates=[];
+  let finish,acknowledge,interruptStarted;
+  const terminal=new Promise(resolve=>{finish=resolve;});
+  const interrupted=new Promise(resolve=>{interruptStarted=resolve;});
+  const acknowledgement=new Promise((_,reject)=>{acknowledge=()=>reject(new Error('close not confirmed'));});
+  const adapter=createNativeAdapter({host:{request:async method=>{
+    if(method==='worker.start')return terminal;
+    assert.equal(method,'worker.interrupt');interruptStarted();return acknowledgement;
+  }}});
+  const running=adapter.run({runId:'run',workerId:'worker',signal:controller.signal,onUpdate:update=>updates.push(update)});
+  adapter.handleEvent({event:'worker.updated',runId:'run',workerId:'worker',threadId:'thread',turnId:'turn',status:'running',revision:1});
+  controller.abort();await interrupted;
+  const final={threadId:'thread',turnId:'turn',status:'interrupted',usage:{total:{totalTokens:23}},activity:[{id:'final-command',type:'commandExecution'}]};
+  finish(final);await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(updates.at(-1),final);
+  acknowledge();await assert.rejects(running,/worker start outcome unresolved/);
+});
+
+test('native cancellation uses terminal identity when no progress event arrived', {timeout:5000}, async t=>{
+  for(const rejected of [false,true])await t.test(rejected?'completed turn rejected':'delayed acknowledgement',async()=>{
+    const controller=new AbortController(),updates=[],calls=[];
+    let finish,acknowledge,rejectAcknowledgement,interruptStarted;
+    const terminal=new Promise(resolve=>{finish=resolve;});
+    const interrupted=new Promise(resolve=>{interruptStarted=resolve;});
+    const acknowledgement=new Promise((resolve,reject)=>{acknowledge=resolve;rejectAcknowledgement=reject;});
+    const adapter=createNativeAdapter({host:{request:async(method,params)=>{
+      calls.push({method,params});
+      if(method==='worker.start')return terminal;
+      assert.equal(method,'worker.interrupt');interruptStarted();return acknowledgement;
+    }}});
+    const running=adapter.run({runId:'run',workerId:'worker',authorityRef:'auth',authorityGeneration:4,signal:controller.signal,onUpdate:update=>updates.push(update)});
+    let settled=false;running.then(()=>{settled=true;},()=>{settled=true;});
+    controller.abort();assert.equal(calls.length,1);
+    const final={threadId:'terminal-thread',turnId:'terminal-turn',status:'completed',output:'too late',usage:{total:{totalTokens:17}},activity:[{id:'terminal-command',type:'commandExecution'}]};
+    finish(final);await interrupted;await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(settled,false,'terminal completion must not bypass the pending interruption acknowledgement');
+    assert.deepEqual(updates,[final]);
+    assert.deepEqual(calls[1],{method:'worker.interrupt',params:{runId:'run',workerId:'worker',authorityRef:'auth',authorityGeneration:4,threadId:'terminal-thread',turnId:'terminal-turn'}});
+    if(rejected)rejectAcknowledgement(new Error('no active turn to interrupt'));else acknowledge({status:'interrupted'});
+    await assert.rejects(running,error=>{
+      assert.equal(error.message,rejected?'no active turn to interrupt; worker start outcome unresolved':'Native worker interrupted');
+      assert.equal(error.outcomeUnresolved,rejected?true:undefined);return true;
+    });
+  });
+});
+
+test('native cancellation without any terminal identity retains evidence and fails closed',async()=>{
+  const controller=new AbortController(),updates=[];controller.abort();
+  const final={status:'completed',usage:{total:{totalTokens:7}},activity:[]};
+  const adapter=createNativeAdapter({host:{request:async method=>{assert.equal(method,'worker.start');return final;}}});
+  await assert.rejects(adapter.run({runId:'run',workerId:'worker',signal:controller.signal,onUpdate:update=>updates.push(update)}),error=>error.outcomeUnresolved===true&&/identity unavailable/.test(error.message));
+  assert.deepEqual(updates,[final]);
+});
+
+test('a rejected late interrupt prevents replacement but retains a resumable terminal identity', {timeout:5000}, async()=>{
+  let finish,starts=0;
+  const terminal=new Promise(resolve=>{finish=resolve;});
+  const f=await fixture(async params=>{
+    if(++starts===1){await terminal;return {threadId:'terminal-thread',turnId:'terminal-turn',status:'completed',output:'late',usage:{total:{totalTokens:17}}};}
+    assert.equal(params.resumeThreadId,'terminal-thread');
+    return {threadId:'terminal-thread',turnId:'recovered-turn',status:'completed',output:'recovered',usage:{total:{totalTokens:23}}};
+  },async()=>{throw new Error('no active turn to interrupt');});
+  const params={source,model:'gpt-5.6-luna',effort:'low',authorityRef:'auth',authorityDigest:'digest'};
+  const run=await f.server.handle('runSource',params);
+  for(let i=0;i<100&&starts===0;i++)await new Promise(resolve=>setTimeout(resolve,5));
+  await f.server.handle('restartWorker',{runId:run.runId,workerId:'worker-1'});
+  for(let i=0;i<100;i++){
+    const state=await f.server.handle('inspectRun',{runId:run.runId});
+    if(state.workers[0]?.restart)break;
+    await new Promise(resolve=>setTimeout(resolve,5));
+  }
+  assert.equal((await f.server.handle('inspectRun',{runId:run.runId})).workers[0].restart,true);
+  finish();
+  const interrupted=await wait(f.server,run.runId);
+  assert.equal(interrupted.status,'interrupted');assert.equal(starts,1);
+  assert.equal(interrupted.workers[0].threadId,'terminal-thread');assert.equal(interrupted.workers[0].turnId,'terminal-turn');
+  assert.deepEqual(interrupted.workers[0].usage,{totalTokens:17});
+  await f.server.handle('resumeRun',{runId:run.runId,authorityRef:'auth',authorityDigest:'digest'});
+  const recovered=await wait(f.server,run.runId);
+  assert.equal(recovered.status,'completed',recovered.error);assert.equal(recovered.result,'recovered');assert.equal(starts,2);
+  assert.deepEqual(recovered.workers[0].usage,{totalTokens:23});
+});
+
 test('native adapter interrupts over the real bridge when no timeout is configured', {timeout:5000}, async t=>{
   const requests=new PassThrough();
   const responses=new PassThrough();

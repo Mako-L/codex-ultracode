@@ -625,7 +625,7 @@ fn worker_row(w: &Value, size: usize, label_width: usize) -> String {
         Some("stopped") => " · stopped",
         _ => "",
     };
-    let duration = if w["startedAt"].is_string() {
+    let duration = if w["durationMs"].as_u64().is_some() || w["startedAt"].is_string() {
         elapsed(w)
     } else {
         String::new()
@@ -664,13 +664,30 @@ fn detail_rows(w: &Value, size: usize, expanded: bool) -> Vec<String> {
     } else {
         status
     };
+    let attempt = w["attempt"]
+        .as_u64()
+        .filter(|attempt| *attempt > 1)
+        .map(|attempt| {
+            let reason = if w["lastAttemptReason"] == "user-retry" {
+                " (user retry)"
+            } else {
+                ""
+            };
+            format!(" · attempt {attempt}{reason}")
+        })
+        .unwrap_or_default();
+    let tools = w["toolCalls"]
+        .as_u64()
+        .filter(|count| *count > 0)
+        .map(|count| format!(" · {count} tool call{}", if count == 1 { "" } else { "s" }))
+        .unwrap_or_default();
     let mut out = vec![
         format!(
-            "{} {heading} · {}",
+            "{} {heading} · {}{attempt}",
             mark(Some(status)),
             clean(w["model"].as_str().unwrap_or_default())
         ),
-        format!("{} tok · {}", token_text(token_total(w)), elapsed(w)),
+        format!("{} tok{tools} · {}", token_text(token_total(w)), elapsed(w)),
         String::new(),
         "Prompt".into(),
     ];
@@ -1134,26 +1151,43 @@ fn mark(status: Option<&str>) -> &'static str {
 }
 
 fn elapsed(v: &Value) -> String {
+    elapsed_at(v, chrono::Utc::now())
+}
+
+fn elapsed_at(v: &Value, now: chrono::DateTime<chrono::Utc>) -> String {
     let parse = |key| {
         v[key]
             .as_str()
             .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
     };
-    match (
-        parse("startedAt").or_else(|| parse("createdAt")),
-        parse("endedAt").or_else(|| parse("updatedAt")),
-    ) {
-        (Some(a), Some(b)) => {
-            let s = (b - a).num_seconds().max(0);
-            if s >= 60 {
-                format!("{}m {}s", s / 60, s % 60)
-            } else {
-                format!("{s}s")
-            }
+    let seconds = if let Some(duration) = v["durationMs"].as_u64() {
+        let active = if v["status"] == "running" {
+            parse("durationUpdatedAt")
+                .map(|updated| now.signed_duration_since(updated).num_milliseconds().max(0) as u64)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        duration.saturating_add(active) / 1000
+    } else {
+        match (
+            parse("startedAt").or_else(|| parse("createdAt")),
+            parse("endedAt").or_else(|| parse("updatedAt")),
+        ) {
+            (Some(a), Some(b)) => (b - a).num_seconds().max(0) as u64,
+            _ => 0,
         }
-        _ => "0s".into(),
+    };
+    if seconds >= 60 {
+        format!("{}m {}s", seconds / 60, seconds % 60)
+    } else {
+        format!("{seconds}s")
     }
 }
+
+#[cfg(test)]
+#[path = "workflow_view_restart_tests.rs"]
+mod restart_tests;
 
 #[cfg(test)]
 mod tests {
