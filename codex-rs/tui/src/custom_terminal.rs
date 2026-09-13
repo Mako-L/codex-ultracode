@@ -590,7 +590,7 @@ fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
         let bg = row.last().map(|cell| cell.bg).unwrap_or(Color::Reset);
 
         // Scan the row to find the rightmost column that still matters: any non-space glyph,
-        // any cell whose bg differs from the row’s trailing bg, any cell with modifiers,
+        // any cell with foreground color, a bg differing from the row’s trailing bg, or modifiers,
         // or any cell explicitly marked for updating.
         // Multi-width glyphs extend that region through their full displayed width.
         // After that point the rest of the row can be cleared with a single ClearToEnd, a perf win
@@ -603,6 +603,7 @@ fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
             // Keep AlwaysUpdate blanks in the drawable prefix; otherwise filtering the tail
             // would discard the repaint explicitly requested by Ratatui.
             if cell.symbol() != " "
+                || cell.fg != Color::Reset
                 || cell.bg != bg
                 || cell.modifier != Modifier::empty()
                 || cell.diff_option == CellDiffOption::AlwaysUpdate
@@ -1207,6 +1208,23 @@ mod tests {
                 "expected the always-update cell in {text:?} to be emitted; commands: {commands:?}"
             );
         }
+    }
+
+    #[test]
+    fn diff_buffers_preserves_foreground_on_trailing_blank() {
+        let previous = Buffer::with_lines(["done  "]);
+        let mut next = previous.clone();
+        next[(4, 0)].set_fg(Color::Gray);
+        let commands = diff_buffers(&previous, &next);
+        assert!(commands.iter().any(|command| matches!(command,
+            DrawCommand::Put { x: 4, y: 0, cell } if cell.fg == Color::Gray && cell.symbol() == " "
+        )), "trailing foreground was discarded: {commands:?}");
+        assert!(
+            !commands.iter().any(|command| matches!(command,
+                DrawCommand::ClearToEnd { x, y: 0, .. } if *x <= 4
+            )),
+            "clear overwrote trailing foreground: {commands:?}"
+        );
     }
 
     #[test]
