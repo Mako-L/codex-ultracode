@@ -839,3 +839,6 @@ async fn second_parent_detach_failure_reattaches_first_and_allows_retry() {
 
 #[path = "ultracode_headless_lifecycle_tests.rs"]
 mod headless_lifecycle;
+
+#[path = "ultracode_attachment_failure_tests.rs"]
+mod attachment_failure;

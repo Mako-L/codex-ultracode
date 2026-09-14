@@ -83,6 +83,8 @@ impl BridgeError {
 struct Inner {
     child: Mutex<Option<Child>>,
     stdin: Mutex<Option<Box<dyn Write + Send>>>,
+    #[cfg(unix)]
+    socket: Option<std::os::unix::net::UnixStream>,
     supervised: bool,
     pending: Mutex<HashMap<String, oneshot::Sender<Result<Value, BridgeError>>>>,
     sequence: AtomicU64,
@@ -145,6 +147,8 @@ impl UltracodeBridge {
         let inner = Arc::new(Inner {
             child: Mutex::new(Some(child)),
             stdin: Mutex::new(Some(Box::new(stdin))),
+            #[cfg(unix)]
+            socket: None,
             supervised: false,
             pending: Mutex::new(HashMap::new()),
             sequence: AtomicU64::new(0),
@@ -188,11 +192,15 @@ impl UltracodeBridge {
         let writer = stream
             .try_clone()
             .map_err(|error| BridgeError::host(error.to_string()))?;
+        let socket = stream
+            .try_clone()
+            .map_err(|error| BridgeError::host(error.to_string()))?;
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let peer = Self {
             inner: Arc::new(Inner {
                 child: Mutex::new(None),
                 stdin: Mutex::new(Some(Box::new(writer))),
+                socket: Some(socket),
                 supervised: true,
                 pending: Mutex::new(HashMap::new()),
                 sequence: AtomicU64::new(0),
@@ -402,9 +410,14 @@ impl UltracodeBridge {
             .map_err(|error| BridgeError::internal(error.to_string(), false))?;
         self.write_line(&encoded)
     }
-    fn disconnect(&self, message: &str) {
+    pub(crate) fn disconnect(&self, message: &str) {
         if self.inner.closed.swap(true, Ordering::SeqCst) {
             return;
+        }
+        #[cfg(unix)]
+        if let Some(socket) = &self.inner.socket {
+            // The reader owns a bridge clone, so dropping the caller cannot close its socket.
+            let _ = socket.shutdown(std::net::Shutdown::Both);
         }
         self.inner.stdin.lock().ok().and_then(|mut s| s.take());
         let error = BridgeError::internal(message, true);
@@ -509,6 +522,10 @@ fn read_stderr<R: Read>(mut source: R, target: Arc<Mutex<String>>) {
         }
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "ultracode_socket_disconnect_tests.rs"]
+mod socket_disconnect_tests;
 
 #[cfg(test)]
 mod tests {
