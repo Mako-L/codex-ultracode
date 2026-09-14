@@ -1948,11 +1948,6 @@ impl TurnRequestProcessor {
             }
             None
         };
-        if current.model_provider_id != "openai" {
-            return Err(invalid_request(
-                "workflow workers require the OpenAI Codex model provider",
-            ));
-        }
 
         let force_read_only =
             params.read_only || matches!(params.agent_type.as_str(), "Explore" | "Plan");
@@ -1985,6 +1980,13 @@ impl TurnRequestProcessor {
         };
 
         let mut config = parent.effective_config().await.as_ref().clone();
+        // OpenAI-authenticated proxies can have custom provider IDs. Preserve
+        // the parent's endpoint and authentication; the catalog validates models.
+        if current.model_provider_id != "openai" && !config.model_provider.requires_openai_auth {
+            return Err(invalid_request(
+                "workflow workers require an authenticated OpenAI Codex model provider",
+            ));
+        }
         config.service_tier.clone_from(&current.service_tier);
         config.model = Some(current.model.clone());
         config
