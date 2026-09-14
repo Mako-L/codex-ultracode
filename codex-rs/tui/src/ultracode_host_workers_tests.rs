@@ -21,6 +21,8 @@ fn install_fixture_node(root: &Path) {
 #[derive(Clone, Copy)]
 enum CompletionOrder {
     Manual,
+    WithBackgroundTerminals,
+    InterruptRejected,
     BeforeStartResponse,
     StaleBeforeStartResponse,
 }
@@ -69,12 +71,23 @@ impl Fixture {
                         let request: Value = serde_json::from_str(&frame).unwrap();
                         if request.get("id").is_none() { continue; }
                         let _ = messages.send(request.clone());
+                        if request["method"] == "turn/interrupt" && matches!(order, CompletionOrder::InterruptRejected) {
+                            socket.send(Message::Text(json!({"id":request["id"],"error":{"code":-32600,"message":"turn already ended"}}).to_string().into())).await.unwrap();
+                            continue;
+                        }
                         let result = match request["method"].as_str() {
                             Some("initialize") => json!({"userAgent":"workflow-test/1.0"}),
                             Some("workflow/authority/capture") => json!({"authorityRef":"authority","generation":1,"authorityDigest":"digest","cwd":daemon_cwd,"parentModel":"gpt-5.6-luna","parentEffort":"low","models":[],"plugins":[],"webSearchAvailable":false,"workflowHostUrl":daemon_listeners.lock().unwrap().get(request["params"]["parentThreadId"].as_str().unwrap()).cloned()}),
                             Some("workflow/worker/start") => json!({"threadId":daemon_thread,"sessionId":daemon_thread,"turnId":"turn-1","model":"gpt-5.6-luna","effort":"low"}),
                             Some("workflow/completion/inject") => json!({"turnId":"parent-final"}),
                             Some("thread/turns/list") => daemon_history.lock().unwrap().clone(),
+                            Some("turn/interrupt") => json!({}),
+                            Some("thread/backgroundTerminals/list") if matches!(order, CompletionOrder::WithBackgroundTerminals | CompletionOrder::InterruptRejected) => {
+                                let first = request["params"]["cursor"].is_null();
+                                json!({"data":[{"itemId":"command","processId":if first {"17"} else {"18"},"command":"sleep 90","cwd":daemon_cwd}],"nextCursor":if first {Some("page-2")} else {None}})
+                            }
+                            Some("thread/backgroundTerminals/list") => json!({"data":[],"nextCursor":null}),
+                            Some("thread/backgroundTerminals/terminate") => json!({"terminated":true}),
                             Some(method) => panic!("unexpected native method {method}"),
                             None => continue,
                         };
@@ -842,3 +855,6 @@ mod headless_lifecycle;
 
 #[path = "ultracode_attachment_failure_tests.rs"]
 mod attachment_failure;
+
+#[path = "ultracode_worker_interrupt_tests.rs"]
+mod worker_interrupt;

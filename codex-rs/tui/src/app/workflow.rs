@@ -1065,11 +1065,17 @@ impl App {
                             .and_then(|id| ThreadId::from_string(id).ok());
                         let turn = params["turnId"].as_str().map(str::to_owned);
                         match (thread, turn) {
-                            (Some(thread), Some(turn)) => app_server
-                                .turn_interrupt(thread, turn)
+                            (Some(thread), Some(turn)) => {
+                                crate::workflow_worker_interrupt::interrupt(
+                                    app_server.request_handle(),
+                                    codex_app_server_protocol::TurnInterruptParams {
+                                        thread_id: thread.to_string(),
+                                        turn_id: turn,
+                                    },
+                                )
                                 .await
-                                .map(|_| serde_json::json!({"status":"interrupted"}))
-                                .map_err(|error| error.to_string()),
+                                .map_err(|error| error.to_string())
+                            }
                             _ => Err("invalid worker interrupt request".into()),
                         }
                     }
