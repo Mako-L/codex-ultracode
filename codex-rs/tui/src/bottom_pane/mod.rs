@@ -52,6 +52,7 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Stylize;
 use ratatui::text::Line;
 use std::time::Duration;
 use std::time::Instant;
@@ -69,6 +70,8 @@ mod status_line_setup;
 mod status_line_style;
 mod status_surface_preview;
 mod title_setup;
+#[cfg(test)]
+mod workflow_footer_tests;
 pub(crate) use action_required_title::ACTION_REQUIRED_PREVIEW_PREFIX;
 pub(crate) use action_required_title::build_action_required_title_text;
 pub(crate) use actionable_banner::ActionableBanner;
@@ -254,6 +257,7 @@ pub(crate) struct BottomPane {
     /// Running-hook summary supplied by the lifecycle owner after its reveal delay.
     hook_status_message: Option<String>,
     workflow_status: Option<Line<'static>>,
+    workflow_status_focused: bool,
     inline_banner: Option<actionable_banner::InlineBanner>,
     /// Streaming may drop the row without losing its elapsed time or modal pause.
     status_timer: crate::status_indicator_widget::StatusTimer,
@@ -329,6 +333,7 @@ impl BottomPane {
             status: None,
             hook_status_message: None,
             workflow_status: None,
+            workflow_status_focused: false,
             inline_banner: None,
             status_timer: crate::status_indicator_widget::StatusTimer::default(),
             unified_exec_footer: UnifiedExecFooter::new(),
@@ -690,7 +695,48 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    /// Forward a key event to the active view or the composer.
+    /// Select the live footer from an empty composer; typing returns to the draft.
+    fn handle_workflow_footer_key(&mut self, key: KeyEvent) -> bool {
+        if self.workflow_status.is_none() || self.composer.popup_active() {
+            self.workflow_status_focused = false;
+            return false;
+        }
+        if key.kind == KeyEventKind::Release {
+            return false;
+        }
+        if !key.modifiers.is_empty() {
+            if self.workflow_status_focused {
+                self.workflow_status_focused = false;
+                self.request_redraw();
+            }
+            return false;
+        }
+        if self.workflow_status_focused {
+            match key.code {
+                KeyCode::Enter => {
+                    self.workflow_status_focused = false;
+                    self.app_event_tx.send(AppEvent::Workflow(
+                        crate::app_event::WorkflowEvent::Open { effort: None },
+                    ));
+                }
+                KeyCode::Up | KeyCode::Esc => self.workflow_status_focused = false,
+                KeyCode::Down => {}
+                _ => {
+                    self.workflow_status_focused = false;
+                    self.request_redraw();
+                    return false;
+                }
+            }
+        } else if key.code == KeyCode::Down && self.composer.is_empty() {
+            self.workflow_status_focused = true;
+        } else {
+            return false;
+        }
+        self.request_redraw();
+        true
+    }
+
+    /// Forward a key event to the active view, selected footer, or composer.
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> InputResult {
         // If a modal/view is active, handle it here; otherwise forward to composer.
         if !self.view_stack.is_empty() {
@@ -739,6 +785,9 @@ impl BottomPane {
             InputResult::None
         } else {
             if self.handle_inline_banner_key(key_event) {
+                return InputResult::None;
+            }
+            if self.handle_workflow_footer_key(key_event) {
                 return InputResult::None;
             }
             // If a task is running and a status line is visible, allow the
@@ -1458,6 +1507,9 @@ impl BottomPane {
     }
 
     pub(crate) fn set_workflow_status(&mut self, status: Option<Line<'static>>) {
+        if status.is_none() {
+            self.workflow_status_focused = false;
+        }
         if self.workflow_status != status {
             self.workflow_status = status;
             self.request_redraw();
@@ -1979,10 +2031,19 @@ impl BottomPane {
             };
             flex2.push(/*flex*/ 0, composer);
             if let Some(status) = &self.workflow_status {
-                flex2.push(
-                    /*flex*/ 0,
-                    RenderableItem::Owned(Box::new(status.clone())),
+                let mut status = status.clone();
+                status.spans.insert(
+                    0,
+                    if self.workflow_status_focused {
+                        "›".cyan().bold()
+                    } else {
+                        " ".into()
+                    },
                 );
+                if self.workflow_status_focused {
+                    status.spans.push(" · enter open · ↑ back".cyan());
+                }
+                flex2.push(/*flex*/ 0, RenderableItem::Owned(Box::new(status)));
             }
             RenderableItem::Owned(Box::new(flex2))
         }
@@ -2061,6 +2122,9 @@ impl Renderable for BottomPane {
         self.as_renderable().desired_height(width)
     }
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
+        if self.workflow_status_focused && self.view_stack.is_empty() {
+            return None;
+        }
         self.as_renderable().cursor_pos(area)
     }
 
@@ -2096,7 +2160,7 @@ mod tests {
     use std::time::Instant;
     use tokio::sync::mpsc::unbounded_channel;
 
-    fn snapshot_buffer(buf: &Buffer) -> String {
+    pub(super) fn snapshot_buffer(buf: &Buffer) -> String {
         let mut lines = Vec::new();
         for y in 0..buf.area().height {
             let mut row = String::new();
@@ -2114,7 +2178,7 @@ mod tests {
         snapshot_buffer(&buf)
     }
 
-    fn test_pane(app_event_tx: AppEventSender) -> BottomPane {
+    pub(super) fn test_pane(app_event_tx: AppEventSender) -> BottomPane {
         test_pane_with_disable_paste_burst(app_event_tx, /*disable_paste_burst*/ false)
     }
 
@@ -2137,7 +2201,7 @@ mod tests {
         assert!(!render_snapshot(&pane, Rect::new(0, 0, 96, 8)).contains("workflow"));
     }
 
-    fn test_pane_with_disable_paste_burst(
+    pub(super) fn test_pane_with_disable_paste_burst(
         app_event_tx: AppEventSender,
         disable_paste_burst: bool,
     ) -> BottomPane {

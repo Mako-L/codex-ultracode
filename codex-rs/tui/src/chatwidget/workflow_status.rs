@@ -14,6 +14,7 @@ fn workflow_status_line(
     let mut agents = 0;
     let mut warning = false;
     let mut current = None;
+    let mut indicator = " ●".green();
     for run in snapshot["runs"].as_array()? {
         if !matches!(run["status"].as_str(), Some("running" | "paused")) {
             continue;
@@ -24,6 +25,18 @@ fn workflow_status_line(
             .map(Vec::as_slice)
             .unwrap_or_default();
         agents += workers.len();
+        if runs == 1 {
+            indicator = if run["status"].as_str() == Some("paused") {
+                " ●".yellow()
+            } else if workers
+                .iter()
+                .any(|worker| worker["status"].as_str() == Some("failed"))
+            {
+                " ●".red()
+            } else {
+                " ●".green()
+            };
+        }
         if current.is_none()
             && let Some(name) = run["name"]
                 .as_str()
@@ -72,11 +85,12 @@ fn workflow_status_line(
     });
     Some(if warning {
         Line::from(vec![
+            indicator,
             summary.into(),
             " · ⚠ Large workflow · /workflows to stop".yellow(),
         ])
     } else {
-        Line::from(format!("{summary} · /workflows"))
+        Line::from(vec![indicator, format!("{summary} · /workflows").into()])
     })
 }
 

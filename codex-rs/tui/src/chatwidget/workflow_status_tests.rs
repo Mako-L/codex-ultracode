@@ -5,15 +5,35 @@ use serde_json::json;
 fn main_view_names_running_workflow_and_updates_progress() {
     let mut snapshot = json!({"runs":[{"name":"repair-project","status":"running","workers":[{"status":"completed"},{"status":"running"},{"status":"pending"}]}]});
     let settings = WorkflowWarningSettings::default();
+    assert_eq!(
+        workflow_status_line(&snapshot, &settings).unwrap().spans[0]
+            .style
+            .fg,
+        Some(ratatui::style::Color::Green)
+    );
     let running = workflow_status_line(&snapshot, &settings)
         .unwrap()
         .to_string();
     insta::assert_snapshot!("main_view_running_workflow", running);
     snapshot["runs"][0]["status"] = json!("paused");
+    assert_eq!(
+        workflow_status_line(&snapshot, &settings).unwrap().spans[0]
+            .style
+            .fg,
+        Some(ratatui::style::Color::Yellow)
+    );
     let paused = workflow_status_line(&snapshot, &settings)
         .unwrap()
         .to_string();
     insta::assert_snapshot!("main_view_paused_workflow", paused);
+    snapshot["runs"][0]["status"] = json!("running");
+    snapshot["runs"][0]["workers"][1]["status"] = json!("failed");
+    assert_eq!(
+        workflow_status_line(&snapshot, &settings).unwrap().spans[0]
+            .style
+            .fg,
+        Some(ratatui::style::Color::Red)
+    );
     snapshot["runs"][0]["status"] = json!("completed");
     assert!(workflow_status_line(&snapshot, &settings).is_none());
 }
