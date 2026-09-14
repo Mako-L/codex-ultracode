@@ -152,13 +152,17 @@ pub(crate) async fn attach(
     let bridge = connect(home)
         .await
         .map_err(|error| BridgeError::host(error.to_string()))?;
-    bridge
+    let attached = bridge
         .request(
             "attach",
             json!({"parentThreadId":parent_id,"pluginRoot":plugin_root}),
             REQUEST_TIMEOUT,
         )
-        .await?;
+        .await;
+    if let Err(error) = attached {
+        bridge.disconnect("workflow attachment failed");
+        return Err(error);
+    }
     Ok(bridge)
 }
 
@@ -304,6 +308,7 @@ pub(super) async fn serve(
                 continue;
             }
             if method == "attach" {
+                let attachment = async {
                 if headless_control.is_some() { return Err(io::Error::other("headless connection cannot attach interactively")); }
                 let requested_parent = params["parentThreadId"].as_str().ok_or_else(|| io::Error::other("missing parent thread ID"))?;
                 if parent_id.as_ref().is_some_and(|parent| parent != requested_parent) { return Err(io::Error::other("connection already belongs to another parent")); }
@@ -330,6 +335,11 @@ pub(super) async fn serve(
                     if request["parentThreadId"] == requested_parent {
                         let _ = sender.send(request["event"].clone());
                     }
+                }
+                Ok::<_, io::Error>(())
+                }.await;
+                if let Err(error) = attachment {
+                    let _ = sender.send(json!({"id":id,"ok":false,"error":{"code":"ATTACH_FAILED","message":error.to_string()}}));
                 }
                 continue;
             }
