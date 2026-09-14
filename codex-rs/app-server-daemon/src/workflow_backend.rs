@@ -20,10 +20,41 @@ pub fn workflow_backend_state_dir(codex_home: &Path, codex_bin: &Path) -> Result
         digest.update(&buffer[..count]);
     }
     let identity = format!("{:x}", digest.finalize());
-    Ok(codex_home
-        .canonicalize()?
-        .join("ultracode-daemon")
-        .join(&identity[..16]))
+    let home = codex_home.canonicalize()?;
+    let directory = home.join("ultracode-daemon").join(&identity[..16]);
+    #[cfg(unix)]
+    if directory
+        .join("control.sock")
+        .as_os_str()
+        .as_encoded_bytes()
+        .len()
+        > 100
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        use std::os::unix::fs::MetadataExt;
+
+        // macOS Unix sockets have only 104 bytes for the entire pathname.
+        // Keep durable runs in CODEX_HOME; only daemon transport state lives here.
+        let uid = unsafe { libc::geteuid() };
+        let mut digest = Sha256::new();
+        digest.update(home.as_os_str().as_encoded_bytes());
+        digest.update([0]);
+        digest.update(identity.as_bytes());
+        let key = format!("{:x}", digest.finalize());
+        let short = PathBuf::from(format!("/tmp/codex-workflow-{uid}-{}", &key[..32]));
+        match std::fs::DirBuilder::new().mode(0o700).create(&short) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error.into()),
+        }
+        let metadata = std::fs::symlink_metadata(&short)?;
+        anyhow::ensure!(
+            metadata.is_dir() && metadata.uid() == uid && metadata.mode() & 0o077 == 0,
+            "workflow socket directory must be a private directory owned by the current user"
+        );
+        return Ok(short);
+    }
+    Ok(directory)
 }
 
 /// Resolve the workflow backend's control socket separately from the stock daemon.
