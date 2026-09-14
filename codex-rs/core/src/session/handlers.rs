@@ -198,7 +198,7 @@ pub async fn exec_approval(
     }
     match decision {
         ReviewDecision::Abort => {
-            sess.interrupt_task().await;
+            sess.interrupt_for_exec_approval(&approval_id).await;
         }
         other => sess.notify_approval(&approval_id, other).await,
     }

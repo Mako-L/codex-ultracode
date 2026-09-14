@@ -217,6 +217,7 @@ use codex_protocol::error::Result as CodexResult;
 #[cfg(test)]
 use codex_protocol::exec_output::StreamOutput;
 
+mod approval_cancellation;
 mod code_mode_warning;
 pub(crate) mod context_window;
 mod environment;
@@ -2649,6 +2650,16 @@ impl Session {
         //  command-level approvals use `call_id`.
         // `approval_id` identifies subcommand callbacks and stdin writes.
         let effective_approval_id = approval_id.clone().unwrap_or_else(|| call_id.clone());
+        let command_cancellation = if kind == ExecApprovalKind::Command && approval_id.is_some() {
+            self.state
+                .lock()
+                .await
+                .command_approval_cancellations
+                .get(&call_id)
+                .cloned()
+        } else {
+            None
+        };
         // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
         let prev_entry = {
@@ -2656,7 +2667,11 @@ impl Session {
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.insert_pending_approval(effective_approval_id.clone(), tx_approve)
+                    ts.insert_pending_approval(
+                        effective_approval_id.clone(),
+                        tx_approve,
+                        command_cancellation,
+                    )
                 }
                 None => None,
             }
@@ -2739,7 +2754,7 @@ impl Session {
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.insert_pending_approval(approval_id.clone(), tx_approve)
+                    ts.insert_pending_approval(approval_id.clone(), tx_approve, None)
                 }
                 None => None,
             }
@@ -3225,7 +3240,7 @@ impl Session {
         };
         match entry {
             Some(tx_approve) => {
-                tx_approve.send(decision).ok();
+                tx_approve.response.send(decision).ok();
             }
             None => {
                 warn!("No pending approval found for call_id: {approval_id}");

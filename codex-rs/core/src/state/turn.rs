@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -88,7 +89,7 @@ pub(crate) struct RunningTask {
 /// Mutable state for a single turn.
 #[derive(Default)]
 pub(crate) struct TurnState {
-    pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
+    pending_approvals: HashMap<String, PendingApproval>,
     pending_request_permissions: HashMap<String, PendingRequestPermissions>,
     pending_user_input: HashMap<String, oneshot::Sender<RequestUserInputResponse>>,
     pending_elicitations: HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>,
@@ -106,6 +107,11 @@ pub(crate) struct TurnState {
     pub(crate) last_known_step_context: Option<Arc<StepContext>>,
 }
 
+pub(crate) struct PendingApproval {
+    pub(crate) response: oneshot::Sender<ReviewDecision>,
+    pub(crate) command_cancellation: Option<Arc<AtomicBool>>,
+}
+
 pub(crate) struct PendingRequestPermissions {
     pub(crate) tx_response: oneshot::Sender<RequestPermissionsResponse>,
     pub(crate) requested_permissions: RequestPermissionProfile,
@@ -117,14 +123,18 @@ impl TurnState {
         &mut self,
         key: String,
         tx: oneshot::Sender<ReviewDecision>,
-    ) -> Option<oneshot::Sender<ReviewDecision>> {
-        self.pending_approvals.insert(key, tx)
+        command_cancellation: Option<Arc<AtomicBool>>,
+    ) -> Option<PendingApproval> {
+        self.pending_approvals.insert(
+            key,
+            PendingApproval {
+                response: tx,
+                command_cancellation,
+            },
+        )
     }
 
-    pub(crate) fn remove_pending_approval(
-        &mut self,
-        key: &str,
-    ) -> Option<oneshot::Sender<ReviewDecision>> {
+    pub(crate) fn remove_pending_approval(&mut self, key: &str) -> Option<PendingApproval> {
         self.pending_approvals.remove(key)
     }
 

@@ -106,6 +106,11 @@ fn tracker_update_for_known_delta<'a>(
 }
 
 async fn emit_exec_command_begin(ctx: ToolEventCtx<'_>, exec_input: &ExecCommandInput<'_>) {
+    if exec_input.source != ExecCommandSource::UnifiedExecInteraction {
+        ctx.session
+            .register_command_approval_cancellation(ctx.call_id)
+            .await;
+    }
     if exec_input.source == ExecCommandSource::UnifiedExecStartup
         && let Some(attribution) = exec_input.plugin_attribution
         && let Some(operation) = recognize_artifact_operation(Some(attribution), exec_input.command)
@@ -563,8 +568,16 @@ async fn emit_exec_stage(
 async fn emit_exec_end(
     ctx: ToolEventCtx<'_>,
     exec_input: ExecCommandInput<'_>,
-    exec_result: ExecCommandResult,
+    mut exec_result: ExecCommandResult,
 ) {
+    if exec_input.source != ExecCommandSource::UnifiedExecInteraction
+        && ctx
+            .session
+            .take_command_approval_cancellation(ctx.call_id)
+            .await
+    {
+        exec_result.status = ExecCommandStatus::Declined;
+    }
     let (plugin_id, script_path) = plugin_attribution_fields(exec_input.plugin_attribution);
     ctx.session
         .emit_turn_item_completed(

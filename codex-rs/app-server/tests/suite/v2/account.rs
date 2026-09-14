@@ -2433,6 +2433,11 @@ async fn login_account_chatgpt_redirects_to_hosted_success_page() -> Result<()> 
 
     let token_redirect_uri = callback_url.clone();
     let mut callback_url = Url::parse(&callback_url)?;
+    // Route the test request to the login server's IPv4 listener while retaining
+    // the original OAuth redirect URI for the token exchange assertion.
+    callback_url
+        .set_host(Some("127.0.0.1"))
+        .map_err(|_| anyhow::anyhow!("failed to route callback to IPv4 loopback"))?;
     let callback_state = format!("{state}.onboarding_entrypoint=life_sciences");
     callback_url
         .query_pairs_mut()
