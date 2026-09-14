@@ -36,6 +36,15 @@ async fn rejected_start(server: &mut TestAppServer, params: serde_json::Value) -
 
 #[tokio::test]
 async fn worker_start_attaches_requester_before_submitting_first_turn() -> Result<()> {
+    assert_worker_start_provider("openai").await
+}
+
+#[tokio::test]
+async fn worker_start_preserves_authenticated_openai_proxy() -> Result<()> {
+    assert_worker_start_provider("headroom").await
+}
+
+async fn assert_worker_start_provider(provider_id: &str) -> Result<()> {
     let model_server = responses::start_mock_server().await;
     // The built-in provider negotiates WebSocket first; this fixture serves HTTP SSE.
     wiremock::Mock::given(wiremock::matchers::method("GET"))
@@ -57,8 +66,13 @@ async fn worker_start_attaches_requester_before_submitting_first_turn() -> Resul
     std::fs::write(
         codex_home.path().join("config.toml"),
         format!(
-            "model = \"gpt-5.6-luna\"\nmodel_provider = \"openai\"\nopenai_base_url = \"{}/v1\"\napproval_policy = \"never\"\nsandbox_mode = \"read-only\"\n",
-            model_server.uri(),
+            "model = \"gpt-5.6-luna\"\nmodel_provider = \"{provider_id}\"\nopenai_base_url = \"{builtin_url}\"\napproval_policy = \"never\"\nsandbox_mode = \"read-only\"\n[model_providers.headroom]\nname = \"OpenAI via local proxy\"\nbase_url = \"{url}/v1\"\nwire_api = \"responses\"\nrequires_openai_auth = true\n",
+            url = model_server.uri(),
+            builtin_url = if provider_id == "openai" {
+                format!("{}/v1", model_server.uri())
+            } else {
+                "http://127.0.0.1:1/v1".to_string()
+            },
         ),
     )?;
     let mut server = TestAppServer::builder()
