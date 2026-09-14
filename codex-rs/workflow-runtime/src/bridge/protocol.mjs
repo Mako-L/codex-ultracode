@@ -1,6 +1,6 @@
 import {randomUUID} from 'node:crypto';
 
-const CODES=new Set(['INVALID_REQUEST','VERSION_MISMATCH','NOT_FOUND','PERMISSION_DENIED','CONFLICT','STALE_AUTHORITY','UNAVAILABLE_MODEL','INVALID_OUTPUT','HOST_ERROR','INTERNAL']);
+const CODES=new Set(['INVALID_REQUEST','VERSION_MISMATCH','NOT_FOUND','PERMISSION_DENIED','CONFLICT','STALE_AUTHORITY','UNAVAILABLE_MODEL','INVALID_OUTPUT','INVALID_WORKER_CONFIGURATION','INVALID_STRUCTURED_OUTPUT','HOST_ERROR','INTERNAL']);
 const makeError=(message,code='INTERNAL',unresolved=false)=>Object.assign(new Error(message),{code,outcomeUnresolved:unresolved});
 
 export function createPeer({input,output,onRequest=async()=>{throw makeError('Method not implemented','NOT_FOUND');},onEvent=()=>{},maxLineBytes=8*1024*1024,requestTimeoutMs=30000,maxPendingRequests=1024}) {
