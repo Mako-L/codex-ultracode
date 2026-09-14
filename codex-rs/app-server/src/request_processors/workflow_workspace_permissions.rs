@@ -181,8 +181,8 @@ impl TurnRequestProcessor {
                 }
                 let (_, response) = self
                     .outgoing
-                    .send_request_to_connections(
-                        Some(&connections),
+                    .send_workflow_request_to_connections(
+                        &connections,
                         ServerRequestPayload::PermissionsRequestApproval(
                             PermissionsRequestApprovalParams {
                                 thread_id: authority.parent_thread_id.to_string(),
@@ -195,7 +195,7 @@ impl TurnRequestProcessor {
                                 permissions: permissions.into(),
                             },
                         ),
-                        Some(authority.parent_thread_id),
+                        authority.parent_thread_id,
                     )
                     .await;
                 let response = response
@@ -328,10 +328,10 @@ impl TurnRequestProcessor {
             })).map_err(|error|internal_error(error.to_string()))?;
             let (_, response) = self
                 .outgoing
-                .send_request_to_connections(
-                    Some(&connections),
+                .send_workflow_request_to_connections(
+                    &connections,
                     ServerRequestPayload::CommandExecutionRequestApproval(params),
-                    Some(parent_id),
+                    parent_id,
                 )
                 .await;
             let approved = response

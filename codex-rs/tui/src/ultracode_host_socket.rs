@@ -201,7 +201,7 @@ pub async fn run(home: PathBuf) -> io::Result<()> {
         Err(error) => return Err(error),
     }
     let daemon_socket = codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(
-        codex_app_server_daemon::workflow_backend_socket_path(&home).map_err(io::Error::other)?,
+        directory.join("control.sock"),
     )?;
     let client = crate::connect_remote_app_server(
         codex_app_server_client::RemoteAppServerEndpoint::UnixSocket {

@@ -435,12 +435,14 @@ impl AppServerSession {
     pub(crate) async fn workflow_worker_start(
         &mut self,
         params: codex_app_server_protocol::WorkflowWorkerStartParams,
-    ) -> Result<codex_app_server_protocol::WorkflowWorkerStartResponse> {
+    ) -> std::result::Result<
+        codex_app_server_protocol::WorkflowWorkerStartResponse,
+        codex_app_server_client::TypedRequestError,
+    > {
         let request_id = self.next_request_id();
         self.client
             .request_typed(ClientRequest::WorkflowWorkerStart { request_id, params })
             .await
-            .wrap_err("workflow/worker/start failed")
     }
     pub(crate) fn new(client: AppServerClient, thread_params_mode: ThreadParamsMode) -> Self {
         Self {

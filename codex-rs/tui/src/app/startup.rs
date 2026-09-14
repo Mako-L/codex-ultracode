@@ -224,6 +224,9 @@ impl App {
                 )
                 .await
         {
+            if !config.disable_workflows {
+                return shutdown_on_startup_error(app_server, error).await;
+            }
             tracing::warn!(%error, "TUI task delegation is unavailable without its MCP server");
         }
         let model_catalog = Arc::new(ModelCatalog::new(available_models.clone()));

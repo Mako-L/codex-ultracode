@@ -122,8 +122,15 @@ pub(crate) struct ThreadScopedOutgoingMessageSender {
 struct PendingCallbackEntry {
     callback: oneshot::Sender<ClientRequestResult>,
     thread_id: Option<ThreadId>,
+    lifetime: RequestLifetime,
     request: ServerRequest,
     _diagnostics_guard: GaugeGuard,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RequestLifetime {
+    Turn,
+    Workflow,
 }
 
 impl ThreadScopedOutgoingMessageSender {
@@ -298,6 +305,32 @@ impl OutgoingMessageSender {
         request: ServerRequestPayload,
         thread_id: Option<ThreadId>,
     ) -> (RequestId, oneshot::Receiver<ClientRequestResult>) {
+        self.send_scoped_request(connection_ids, request, thread_id, RequestLifetime::Turn)
+            .await
+    }
+
+    pub(crate) async fn send_workflow_request_to_connections(
+        &self,
+        connection_ids: &[ConnectionId],
+        request: ServerRequestPayload,
+        thread_id: ThreadId,
+    ) -> (RequestId, oneshot::Receiver<ClientRequestResult>) {
+        self.send_scoped_request(
+            Some(connection_ids),
+            request,
+            Some(thread_id),
+            RequestLifetime::Workflow,
+        )
+        .await
+    }
+
+    async fn send_scoped_request(
+        &self,
+        connection_ids: Option<&[ConnectionId]>,
+        request: ServerRequestPayload,
+        thread_id: Option<ThreadId>,
+        lifetime: RequestLifetime,
+    ) -> (RequestId, oneshot::Receiver<ClientRequestResult>) {
         let id = self.next_request_id();
         let outgoing_message_id = id.clone();
         let request = request.request_with_id(outgoing_message_id.clone());
@@ -310,6 +343,7 @@ impl OutgoingMessageSender {
                 PendingCallbackEntry {
                     callback: tx_approve,
                     thread_id,
+                    lifetime,
                     request: request.clone(),
                     _diagnostics_guard: PENDING_SERVER_REQUESTS.track(),
                 },
@@ -482,12 +516,18 @@ impl OutgoingMessageSender {
         thread_id: ThreadId,
         error: Option<JSONRPCErrorError>,
     ) {
+        let turn_transition = error
+            .as_ref()
+            .and_then(|error| error.data.as_ref())
+            .is_some_and(|data| data["reason"] == TURN_TRANSITION_PENDING_REQUEST_ERROR_REASON);
         let entries = {
             let mut request_id_to_callback = self.request_id_to_callback.lock().await;
             let request_ids = request_id_to_callback
                 .iter()
                 .filter_map(|(request_id, entry)| {
-                    (entry.thread_id == Some(thread_id)).then_some(request_id.clone())
+                    (entry.thread_id == Some(thread_id)
+                        && !(turn_transition && entry.lifetime == RequestLifetime::Workflow))
+                        .then_some(request_id.clone())
                 })
                 .collect::<Vec<_>>();
 
@@ -737,6 +777,10 @@ fn timestamped_server_notification(notification: ServerNotification) -> Outgoing
         emitted_at_ms: Some(now_unix_timestamp_ms().try_into().unwrap_or_default()),
     })
 }
+
+#[cfg(test)]
+#[path = "outgoing_workflow_requests_tests.rs"]
+mod workflow_tests;
 
 #[cfg(test)]
 mod tests {

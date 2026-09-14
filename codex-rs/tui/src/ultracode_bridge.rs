@@ -56,7 +56,21 @@ impl std::fmt::Display for BridgeError {
     }
 }
 impl std::error::Error for BridgeError {}
+
+#[cfg(test)]
+#[path = "ultracode_worker_configuration_tests.rs"]
+mod worker_configuration_tests;
 impl BridgeError {
+    pub(crate) fn worker_start(error: codex_app_server_client::TypedRequestError) -> Self {
+        if matches!(&error, codex_app_server_client::TypedRequestError::Server { source, .. }
+            if matches!(source.code, -32600 | -32602))
+        {
+            Self::host_code("INVALID_WORKER_CONFIGURATION", error.to_string())
+        } else {
+            Self::host(error.to_string())
+        }
+    }
+
     fn internal(message: impl Into<String>, unresolved: bool) -> Self {
         Self {
             code: "INTERNAL".into(),
