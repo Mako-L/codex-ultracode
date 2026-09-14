@@ -68,6 +68,20 @@ test('native worker configuration rejection fails the workflow without substitut
   }
 });
 
+test('workspace approval waits beyond the ordinary bridge deadline',async()=>{
+  const requests=new PassThrough(),responses=new PassThrough();
+  const host=createPeer({input:responses,output:requests,requestTimeoutMs:5});
+  const server=createPeer({input:requests,output:responses,onRequest:async method=>{
+    await new Promise(resolve=>setTimeout(resolve,30));
+    return {approved:true,method};
+  }});
+  const adapter=createNativeAdapter({host});
+  try{
+    assert.deepEqual(await adapter.prepare({}),{approved:true,method:'workspace.prepare'});
+    assert.deepEqual(await adapter.release({}),{approved:true,method:'workspace.release'});
+  }finally{await Promise.all([host.close(),server.close()]);}
+});
+
 test('bridge reads and atomically persists workflow effort',async()=>{
   const f=await fixture();
   assert.deepEqual(await f.server.handle('getSettings',{}),{});
