@@ -278,7 +278,8 @@ impl WorkflowView {
                         matches!(
                             w["status"].as_str(),
                             Some("running" | "queued" | "preparing")
-                        )
+                        ) || (status == "paused"
+                            && matches!(w["status"].as_str(), Some("stopped" | "interrupted")))
                     })
                     .and_then(|w| w["id"].as_str())
                     .filter(|id| !id.is_empty())
@@ -1150,10 +1151,12 @@ fn render_overview(view: &WorkflowView, width: usize, height: usize) -> Vec<Stri
         )
     };
     let selected_worker_can_stop = workers.get(view.state.worker).is_some_and(|worker| {
-        matches!(
+        (matches!(
             worker["status"].as_str(),
             Some("running" | "queued" | "preparing")
-        ) && worker["id"].as_str().is_some_and(|id| !id.is_empty())
+        ) || (run["status"] == "paused"
+            && matches!(worker["status"].as_str(), Some("stopped" | "interrupted"))))
+            && worker["id"].as_str().is_some_and(|id| !id.is_empty())
     });
     let lifecycle = match run["status"].as_str() {
         Some("running")
@@ -1167,6 +1170,13 @@ fn render_overview(view: &WorkflowView, width: usize, height: usize) -> Vec<Stri
             }
         }
         Some("running") => " · p pause · x stop",
+        Some("paused")
+            if selected_worker_can_stop
+                && (view.state.screen == WorkflowScreen::Detail
+                    || view.state.focus == WorkflowFocus::Workers) =>
+        {
+            " · p resume · x stop"
+        }
         Some("paused") => " · p resume",
         _ => "",
     };

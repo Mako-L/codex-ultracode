@@ -3,6 +3,44 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 
 #[test]
+fn paused_interrupted_worker_can_be_stopped_without_stopping_the_run() {
+    let mut footers = Vec::new();
+    for screen in [WorkflowScreen::Overview, WorkflowScreen::Detail] {
+        let mut view = WorkflowView::new(
+            json!({"runs": [{"id": "r", "status": "paused",
+            "phases": [{"name": "Work"}], "workers": [
+                {"id": "w", "phase": "Work", "status": "stopped", "rawStatus": "interrupted"}
+            ]}]}),
+            None,
+        );
+        view.state.screen = screen;
+        view.state.focus = WorkflowFocus::Workers;
+        assert_eq!(
+            view.handle_key(KeyEvent::from(KeyCode::Char('x'))),
+            Some(WorkflowAction::StopRun {
+                run_id: "r".into(),
+                worker_id: Some("w".into())
+            })
+        );
+        footers.push(view.lines(160, 48).last().unwrap().trim().to_string());
+        for (run_status, worker_status) in [
+            ("running", "stopped"),
+            ("paused", "completed"),
+            ("paused", "failed"),
+        ] {
+            view.snapshot["runs"][0]["status"] = json!(run_status);
+            view.snapshot["runs"][0]["workers"][0]["status"] = json!(worker_status);
+            assert_eq!(view.handle_key(KeyEvent::from(KeyCode::Char('x'))), None);
+            assert!(!view.lines(160, 48).last().unwrap().contains("x stop"));
+        }
+    }
+    insta::assert_snapshot!(footers.join("\n"), @r"
+    ↑↓ select · f filter · p resume · x stop · esc back · s save
+    ↑↓ agent · p resume · x stop · esc back · s save
+    ");
+}
+
+#[test]
 fn completed_outcome_uses_result_instead_of_retained_error() {
     let rows = detail_rows(
         &json!({"status": "completed", "error": "old failure",
