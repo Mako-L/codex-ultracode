@@ -1,0 +1,7 @@
+---
+source: tui/src/bottom_pane/apply_patch_header_tests.rs
+assertion_line: 50
+expression: lines
+---
+Description: Save workflow 'fix-fixture' to <workflow-file>
+Destination directory: <workflow-directory>

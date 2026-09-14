@@ -108,6 +108,7 @@ pub(crate) struct ApplyPatchApprovalRequest {
     pub thread_label: Option<String>,
     pub id: String,
     pub reason: Option<String>,
+    pub grant_root: Option<PathBuf>,
     pub cwd: AbsolutePathBuf,
     pub changes: HashMap<PathBuf, FileChange>,
 }
@@ -2171,6 +2172,7 @@ mod tests {
             id: "test".to_string(),
             reason: None,
             cwd: test_path_buf("/tmp").abs(),
+            grant_root: None,
             changes,
         });
         let keymap = crate::keymap::RuntimeKeymap::defaults();
@@ -2204,6 +2206,7 @@ mod tests {
             id: "test".to_string(),
             reason: None,
             cwd: absolute_path("/tmp"),
+            grant_root: None,
             changes: HashMap::new(),
         });
         let view = make_overlay(request, tx, Features::with_defaults());

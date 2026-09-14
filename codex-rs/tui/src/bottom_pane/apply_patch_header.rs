@@ -58,7 +58,18 @@ pub(super) fn build_header(request: &ApplyPatchApprovalRequest) -> Box<dyn Rende
         .collect();
     destinations.sort();
     destinations.dedup();
-    if destinations.is_empty() {
+    if destinations.is_empty()
+        && let Some(root) = &request.grant_root
+    {
+        let destination = LegacyAppPathString::from_path(root)
+            .to_inferred_path_uri()
+            .map(|path| path.inferred_native_path_string())
+            .unwrap_or_else(|| request.cwd.join(root).display().to_string());
+        header.push(Line::from_iter([
+            "Destination directory: ".into(),
+            destination.bold(),
+        ]));
+    } else if destinations.is_empty() {
         header.push(Line::from(vec![
             "Destination: ".into(),
             "unavailable".bold(),
@@ -72,3 +83,7 @@ pub(super) fn build_header(request: &ApplyPatchApprovalRequest) -> Box<dyn Rende
     }
     Box::new(Paragraph::new(header).wrap(Wrap { trim: false }))
 }
+
+#[cfg(test)]
+#[path = "apply_patch_header_tests.rs"]
+mod tests;

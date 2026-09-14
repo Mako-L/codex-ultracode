@@ -256,6 +256,7 @@ impl App {
                     thread_label,
                     id: params.item_id.clone(),
                     reason: params.reason.clone(),
+                    grant_root: params.grant_root.clone(),
                     cwd: self
                         .thread_cwd(thread_id)
                         .await

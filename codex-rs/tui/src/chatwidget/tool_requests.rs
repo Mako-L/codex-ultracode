@@ -318,6 +318,7 @@ impl ChatWidget {
             id: ev.call_id,
             reason: ev.reason,
             changes: ev.changes,
+            grant_root: ev.grant_root,
             cwd: self.config.cwd.clone(),
         });
         self.bottom_pane

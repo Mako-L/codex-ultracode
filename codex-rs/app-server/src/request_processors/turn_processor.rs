@@ -1258,8 +1258,9 @@ impl TurnRequestProcessor {
                                             item_id: Uuid::new_v4().to_string(),
                                             started_at_ms: chrono::Utc::now().timestamp_millis(),
                                             reason: Some(format!(
-                                                "Save workflow '{}'",
-                                                params.name
+                                                "Save workflow '{}' to {}",
+                                                params.name,
+                                                target.display()
                                             )),
                                             grant_root: Some(directory.to_path_buf()),
                                         },
