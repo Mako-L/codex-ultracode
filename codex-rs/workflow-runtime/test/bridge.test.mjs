@@ -48,6 +48,26 @@ test('source validation supplies consent metadata without launching or storing a
   assert.deepEqual(f.calls,[]);
 });
 
+test('native worker configuration rejection fails the workflow without substitution',async()=>{
+  for(const [model,effort,message] of [
+    ['missing-model','low','workflow worker model is unavailable'],
+    ['gpt-5.6-luna','bananas','workflow worker effort is unsupported'],
+  ]){
+    const f=await fixture(async()=>{throw Object.assign(new Error(message),{code:'INVALID_WORKER_CONFIGURATION'});});
+    const script=`export const meta={name:'invalid-worker',description:'Rejected worker configuration'}; return await agent('must not run',{model:${JSON.stringify(model)},effort:${JSON.stringify(effort)}});`;
+    const started=await f.server.handle('runSource',{source:script,authorityRef:'auth-1',authorityDigest:'digest-1'});
+    const state=await wait(f.server,started.runId);
+    assert.equal(state.status,'failed');
+    assert.equal(state.error,message);
+    assert.equal(state.workers[0].status,'failed');
+    assert.equal(state.workers[0].threadId,undefined);
+    const requests=f.calls.filter(([method])=>method==='worker.start');
+    assert.equal(requests.length,1);
+    assert.equal(requests[0][1].model,model);
+    assert.equal(requests[0][1].effort,effort);
+  }
+});
+
 test('bridge reads and atomically persists workflow effort',async()=>{
   const f=await fixture();
   assert.deepEqual(await f.server.handle('getSettings',{}),{});

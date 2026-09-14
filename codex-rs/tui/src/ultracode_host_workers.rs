@@ -205,7 +205,7 @@ impl Runtime {
                             workers.early.clear();
                             workers.terminals.clear();
                         }
-                        return Err(BridgeError::host(error.to_string()));
+                        return Err(BridgeError::worker_start(error));
                     }
                 };
                 let thread_id = started.thread_id.clone();

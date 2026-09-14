@@ -1033,9 +1033,7 @@ impl App {
                         }
                         Err(error) => bridge.respond(
                             &id,
-                            Err(crate::ultracode_bridge::BridgeError::host(
-                                error.to_string(),
-                            )),
+                            Err(crate::ultracode_bridge::BridgeError::worker_start(error)),
                         )?,
                     }
                     return Ok(());
