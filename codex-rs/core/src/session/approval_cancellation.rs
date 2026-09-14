@@ -3,23 +3,32 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
 use super::session::Session;
+use super::turn_context::TurnContext;
 
 impl Session {
-    pub(crate) async fn register_command_approval_cancellation(&self, call_id: &str) {
+    pub(crate) async fn register_command_approval_cancellation(
+        &self,
+        turn_context: &TurnContext,
+        call_id: &str,
+    ) {
         self.state
             .lock()
             .await
             .command_approval_cancellations
-            .entry(call_id.to_owned())
+            .entry((turn_context.sub_id.clone(), call_id.to_owned()))
             .or_insert_with(|| Arc::new(AtomicBool::new(false)));
     }
 
-    pub(crate) async fn take_command_approval_cancellation(&self, call_id: &str) -> bool {
+    pub(crate) async fn take_command_approval_cancellation(
+        &self,
+        turn_context: &TurnContext,
+        call_id: &str,
+    ) -> bool {
         self.state
             .lock()
             .await
             .command_approval_cancellations
-            .remove(call_id)
+            .remove(&(turn_context.sub_id.clone(), call_id.to_owned()))
             .is_some_and(|cancelled| cancelled.swap(false, Ordering::AcqRel))
     }
 
@@ -49,5 +58,55 @@ impl Session {
         // Match abort_all_tasks: tasks observe cancellation before their approval
         // waiters close, preventing an early model-visible approval failure.
         drop(pending);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::SessionSettingsUpdate;
+    use crate::session::tests::make_session_and_context;
+    use crate::session::turn_context::NewTurnContextOptions;
+
+    #[tokio::test]
+    async fn command_cancellation_is_scoped_to_its_turn() {
+        let (session, first_turn) = make_session_and_context().await;
+        let (second_turn, _) = session
+            .new_turn_with_sub_id(
+                "second-turn".to_string(),
+                SessionSettingsUpdate::default(),
+                NewTurnContextOptions::default(),
+            )
+            .await
+            .expect("create second turn");
+        let call_id = "reused-call-id";
+
+        session
+            .register_command_approval_cancellation(&first_turn, call_id)
+            .await;
+        let first_cancellation = session
+            .state
+            .lock()
+            .await
+            .command_approval_cancellations
+            .get(&(first_turn.sub_id.clone(), call_id.to_string()))
+            .cloned()
+            .expect("first turn cancellation marker");
+        first_cancellation.store(true, Ordering::Release);
+
+        session
+            .register_command_approval_cancellation(&second_turn, call_id)
+            .await;
+
+        assert!(
+            !session
+                .take_command_approval_cancellation(&second_turn, call_id)
+                .await
+        );
+        assert!(
+            session
+                .take_command_approval_cancellation(&first_turn, call_id)
+                .await
+        );
     }
 }
