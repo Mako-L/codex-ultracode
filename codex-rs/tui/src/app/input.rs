@@ -235,7 +235,8 @@ impl App {
                     modifiers,
                     kind: KeyEventKind::Press,
                     ..
-                } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'c')
+                } if modifiers.contains(KeyModifiers::CONTROL)
+                    && (c.eq_ignore_ascii_case(&'c') || c.eq_ignore_ascii_case(&'d'))
             )
         {
             let mut running_thread_id = if self.chat_widget.is_agent_turn_running()
