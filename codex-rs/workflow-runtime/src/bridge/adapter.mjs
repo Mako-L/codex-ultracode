@@ -10,8 +10,8 @@ export function createNativeAdapter({host}) {
     entry.interruptPromise.catch(()=>{});
   };
   return {
-    prepare:request=>host.request('workspace.prepare',request),
-    release:request=>host.request('workspace.release',request),
+    prepare:request=>host.request('workspace.prepare',request,{timeoutMs:null}),
+    release:request=>host.request('workspace.release',request,{timeoutMs:null}),
     handleEvent(event) {
       if(event?.event!=='worker.updated')return;
       const entry=active.get(key(event.runId,event.workerId));
