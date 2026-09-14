@@ -376,11 +376,14 @@ impl Runtime {
                 }
             }
         });
-        let workflows_enabled = !params["threadStartParams"]
-            .get("config")
-            .and_then(|config| config.get("disable_workflows"))
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
+        // Interactive workflow consent travels over the native dynamic-tool channel.
+        // Only explicitly headless parents launch workflows through MCP.
+        let workflows_enabled = headless.is_some()
+            && !params["threadStartParams"]
+                .get("config")
+                .and_then(|config| config.get("disable_workflows"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
         match params.get("frontend").and_then(Value::as_str) {
             None | Some("interactive") if headless.is_none() => {}
             Some("headless") if headless.is_some() => {}

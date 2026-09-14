@@ -2623,7 +2623,7 @@ async fn session_workflow_mode_reaches_native_turn_and_preserves_keyword_dismiss
     assert!(
         context["ultracode_session"]
             .value
-            .contains("tools.mcp__codex_tui__workflow")
+            .contains("tools.workflow")
     );
     assert!(
         context["ultracode_keyword"]
