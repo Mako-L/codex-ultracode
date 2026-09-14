@@ -107,7 +107,8 @@ pub(crate) async fn connect(home: &Path) -> io::Result<UltracodeBridge> {
                 });
             }
             let mut child = command.spawn()?;
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+            // Cold startup includes hashing the executable and initializing its daemon client.
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
             loop {
                 if let Ok(stream) = std::os::unix::net::UnixStream::connect(&socket) {
                     break stream;
