@@ -7,6 +7,8 @@ use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use super::AdditionalContextStore;
 use super::auto_compact_window::AutoCompactWindow;
@@ -31,6 +33,8 @@ use tokio_util::task::AbortOnDropHandle;
 
 /// Persistent, session-scoped state previously stored directly on `Session`.
 pub(crate) struct SessionState {
+    /// Live command cancellation signals also cover processes that outlive their turn.
+    pub(crate) command_approval_cancellations: HashMap<String, Arc<AtomicBool>>,
     pub(crate) session_configuration: SessionConfiguration,
     /// Persisted origin of the session base instructions, when known.
     pub(crate) base_instructions_provenance: Option<BaseInstructionsProvenance>,
@@ -88,6 +92,7 @@ impl SessionState {
             current_time_reminder: CurrentTimeReminderState::default(),
             active_connector_selection: HashSet::new(),
             pending_session_start_sources: VecDeque::new(),
+            command_approval_cancellations: HashMap::new(),
             granted_permissions_by_environment_id: HashMap::new(),
             next_turn_is_first: true,
         }
