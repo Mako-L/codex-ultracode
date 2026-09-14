@@ -598,6 +598,13 @@ See the Codex keymap documentation for supported actions and examples."
                 Ok(result) => result?,
                 Err(err) => return shutdown_on_startup_error(app_server, err).await,
             }
+            if !app.config.disable_workflows {
+                app.app_event_tx.send(AppEvent::Workflow(
+                    crate::app_event::WorkflowEvent::LoadCatalog {
+                        thread_id: thread_id.to_string(),
+                    },
+                ));
+            }
             if should_prompt_for_paused_goal_after_startup_resume
                 && let Err(err) = startup_draft
                     .run_until(
