@@ -22,20 +22,22 @@ test('bidirectional requests use disjoint IDs and carry chunked UTF-8 plus event
   await new Promise(resolve=>setImmediate(resolve));assert.equal(unicode,'😀');await Promise.all([p.a.close(),p.b.close()]);
 });
 
-test('native HOST_ERROR preserves its message without disconnecting the bridge',async t=>{
+test('native worker error codes preserve their meaning without disconnecting the bridge',async t=>{
+  for(const code of ['HOST_ERROR','INVALID_WORKER_CONFIGURATION','INVALID_STRUCTURED_OUTPUT']){
   const input=new PassThrough(),output=new PassThrough();
   const peer=createPeer({input,output});
   t.after(()=>peer.close());
   output.on('data',chunk=>{
     const request=JSON.parse(chunk.toString());
     const response=request.method==='worker.start'
-      ?{id:request.id,ok:false,error:{code:'HOST_ERROR',message:'native worker start rejected'}}
+      ?{id:request.id,ok:false,error:{code,message:'native worker start rejected'}}
       :{id:request.id,ok:true,result:{connected:true}};
     input.write(`${JSON.stringify(response)}\n`);
   });
   await assert.rejects(()=>peer.request('worker.start',{}),error=>
-    error.code==='HOST_ERROR'&&error.message==='native worker start rejected'&&!error.outcomeUnresolved);
+    error.code===code&&error.message==='native worker start rejected'&&!error.outcomeUnresolved);
   assert.deepEqual(await peer.request('inspect',{}),{connected:true});
+  }
 });
 
 test('remote errors preserve stable code and message',async()=>{
