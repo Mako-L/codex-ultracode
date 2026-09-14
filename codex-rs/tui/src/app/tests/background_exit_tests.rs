@@ -2,6 +2,42 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
+async fn daemon_ctrl_d_requires_explicit_background_exit_choice() -> Result<()> {
+    let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+    let thread_id = prepare_running_local_daemon(&mut app)?;
+    let (mut app_server, mut tui) =
+        prepare_background_exit_test(&app, &mut app_event_rx, &mut op_rx).await?;
+
+    app.handle_key_event(
+        &mut tui,
+        &mut app_server,
+        KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+    )
+    .await;
+    assert!(!app.chat_widget.no_modal_or_popup_active());
+    assert!(app_event_rx.try_recv().is_err());
+    assert!(op_rx.try_recv().is_err());
+
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let event = app_event_rx.try_recv()?;
+    assert_matches!(
+        event,
+        AppEvent::RunningTaskExit {
+            action: RunningTaskExitAction::RunInBackground,
+            thread_id: event_thread_id,
+        } if event_thread_id == thread_id
+    );
+    let control = app.handle_event(&mut tui, &mut app_server, event).await?;
+    assert_matches!(control, AppRunControl::Exit(ExitReason::UserRequested));
+    assert!(op_rx.try_recv().is_err());
+    assert!(app_event_rx.try_recv().is_err());
+    Ok(())
+}
+
+#[tokio::test]
 async fn daemon_disconnect_exit_summary_includes_reconnect_and_stop_instructions() -> Result<()> {
     let (mut app, _, _) = make_test_app_with_channels().await;
     let thread_id = prepare_running_local_daemon(&mut app)?;
