@@ -122,6 +122,7 @@ async fn explicit_mcp_reviewer_override_takes_precedence_over_action_context() {
     review_context.approvals_reviewer = ApprovalsReviewer::AutoReview;
     let context = ApprovalContext {
         review_context,
+        command_cancellation: None,
         cancellation_token: None,
         call_id: "mcp-override".to_string(),
         tool_name: ToolName::plain("dangerous"),

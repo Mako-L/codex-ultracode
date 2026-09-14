@@ -869,6 +869,7 @@ impl UnifiedExecProcessManager {
             }
             let approval_context = ApprovalContext {
                 review_context: GuardianReviewContext::from(&context.step_context),
+                command_cancellation: None,
                 cancellation_token: Some(context.cancellation_token.clone()),
                 call_id: context.call_id.clone(),
                 tool_name: ToolName::plain("write_stdin"),
