@@ -6,6 +6,19 @@ use super::session::Session;
 use super::turn_context::TurnContext;
 
 impl Session {
+    pub(crate) async fn command_approval_cancellation(
+        &self,
+        turn_context: &TurnContext,
+        call_id: &str,
+    ) -> Option<Arc<AtomicBool>> {
+        self.state
+            .lock()
+            .await
+            .command_approval_cancellations
+            .get(&(turn_context.sub_id.clone(), call_id.to_owned()))
+            .cloned()
+    }
+
     pub(crate) async fn register_command_approval_cancellation(
         &self,
         turn_context: &TurnContext,

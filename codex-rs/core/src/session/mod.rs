@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -2636,6 +2637,7 @@ impl Session {
         kind: ExecApprovalKind,
         call_id: String,
         approval_id: Option<String>,
+        command_cancellation: Option<Arc<AtomicBool>>,
         environment_id: Option<String>,
         command: Vec<String>,
         cwd: PathUri,
@@ -2651,12 +2653,7 @@ impl Session {
         // `approval_id` identifies subcommand callbacks and stdin writes.
         let effective_approval_id = approval_id.clone().unwrap_or_else(|| call_id.clone());
         let command_cancellation = if kind == ExecApprovalKind::Command && approval_id.is_some() {
-            self.state
-                .lock()
-                .await
-                .command_approval_cancellations
-                .get(&(turn_context.sub_id.clone(), call_id.clone()))
-                .cloned()
+            command_cancellation
         } else {
             None
         };
@@ -2850,6 +2847,7 @@ impl Session {
             };
             let approval_context = ApprovalContext {
                 review_context: crate::guardian::GuardianReviewContext::from(step_context),
+                command_cancellation: None,
                 cancellation_token: Some(cancellation_token.clone()),
                 call_id,
                 tool_name: ToolName::plain("request_permissions"),

@@ -180,6 +180,7 @@ impl ToolOrchestrator {
                         })?;
                     let approval_ctx = ApprovalContext {
                         review_context: GuardianReviewContext::from(&tool_ctx.step_context),
+                        command_cancellation: None,
                         cancellation_token: Some(tool_ctx.cancellation_token.clone()),
                         call_id: tool_ctx.call_id.clone(),
                         tool_name: tool_ctx.tool_name.clone(),
@@ -213,6 +214,7 @@ impl ToolOrchestrator {
                     })?;
                 let approval_ctx = ApprovalContext {
                     review_context: GuardianReviewContext::from(&tool_ctx.step_context),
+                    command_cancellation: None,
                     cancellation_token: Some(tool_ctx.cancellation_token.clone()),
                     call_id: tool_ctx.call_id.clone(),
                     tool_name: tool_ctx.tool_name.clone(),
@@ -422,6 +424,7 @@ impl ToolOrchestrator {
                         })?;
                     let approval_ctx = ApprovalContext {
                         review_context: GuardianReviewContext::from(&tool_ctx.step_context),
+                        command_cancellation: None,
                         cancellation_token: Some(tool_ctx.cancellation_token.clone()),
                         call_id: tool_ctx.call_id.clone(),
                         tool_name: tool_ctx.tool_name.clone(),

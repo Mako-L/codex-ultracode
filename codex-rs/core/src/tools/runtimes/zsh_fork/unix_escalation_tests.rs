@@ -10,6 +10,8 @@ use crate::config::Constrained;
 use crate::guardian::GuardianReviewContext;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::tests::make_session_and_context;
+use crate::session::SessionSettingsUpdate;
+use crate::session::turn_context::NewTurnContextOptions;
 use crate::tools::runtimes::tests::test_credential_broker_network_proxy;
 use anyhow::Context;
 use codex_execpolicy::Decision;
@@ -44,6 +46,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::sync::RwLock;
 
@@ -94,6 +97,63 @@ fn denied_read_file_system_sandbox_policy() -> FileSystemSandboxPolicy {
 
 fn test_sandbox_cwd() -> AbsolutePathBuf {
     AbsolutePathBuf::try_from(host_absolute_path(&["workspace"])).unwrap()
+}
+
+#[tokio::test]
+async fn execve_cancellation_uses_launching_turn_marker() -> anyhow::Result<()> {
+    let (session, first_turn) = make_session_and_context().await;
+    let session = Arc::new(session);
+    let first_turn = Arc::new(first_turn);
+    let (second_turn, _) = session
+        .new_turn_with_sub_id(
+            "second-turn".to_string(),
+            SessionSettingsUpdate::default(),
+            NewTurnContextOptions::default(),
+        )
+        .await?;
+    let call_id = "reused-execve-call";
+    session
+        .register_command_approval_cancellation(&first_turn, call_id)
+        .await;
+    session
+        .register_command_approval_cancellation(&second_turn, call_id)
+        .await;
+    let provider = CoreShellActionProvider {
+        policy: Arc::new(RwLock::new(codex_execpolicy::Policy::empty())),
+        session: Arc::clone(&session),
+        review_context: GuardianReviewContext::from(first_turn.clone()),
+        call_id: call_id.to_string(),
+        environment_id: "local".to_string(),
+        source: GuardianCommandSource::UnifiedExec,
+        tool_name: ToolName::plain("exec_command"),
+        approval_policy: AskForApproval::OnRequest,
+        permission_profile: PermissionProfile::read_only(),
+        sandbox_permissions: SandboxPermissions::RequireEscalated,
+        approval_sandbox_permissions: SandboxPermissions::RequireEscalated,
+        prompt_permissions: None,
+        stopwatch: codex_shell_escalation::Stopwatch::new(Duration::from_secs(1)),
+    };
+
+    let approval_context = provider
+        .approval_context(GuardianReviewContext::from(second_turn.clone()), false)
+        .await;
+    assert_eq!(approval_context.review_context.turn().sub_id, second_turn.sub_id);
+    approval_context
+        .command_cancellation
+        .expect("launching turn cancellation marker")
+        .store(true, Ordering::Release);
+
+    assert!(
+        session
+            .take_command_approval_cancellation(&first_turn, call_id)
+            .await
+    );
+    assert!(
+        !session
+            .take_command_approval_cancellation(&second_turn, call_id)
+            .await
+    );
+    Ok(())
 }
 
 #[test]

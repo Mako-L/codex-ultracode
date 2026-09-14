@@ -47,6 +47,7 @@ use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 use tracing::warn;
@@ -54,6 +55,7 @@ use tracing::warn;
 #[derive(Clone)]
 pub(crate) struct ApprovalContext {
     pub(crate) review_context: GuardianReviewContext,
+    pub(crate) command_cancellation: Option<Arc<AtomicBool>>,
     pub(crate) cancellation_token: Option<CancellationToken>,
     pub(crate) call_id: String,
     pub(crate) tool_name: ToolName,
@@ -741,6 +743,7 @@ impl Session {
                         ExecApprovalKind::Command,
                         ctx.call_id.clone(),
                         /*approval_id*/ None,
+                        /*command_cancellation*/ None,
                         Some(environment_id.clone()),
                         command.clone(),
                         cwd.into(),
@@ -770,6 +773,7 @@ impl Session {
                     ExecApprovalKind::WriteStdin,
                     id.clone(),
                     Some(approval_id.clone()),
+                    /*command_cancellation*/ None,
                     Some(environment_id.clone()),
                     vec![
                         "write_stdin".to_string(),
@@ -801,6 +805,7 @@ impl Session {
                     ExecApprovalKind::Command,
                     ctx.call_id.clone(),
                     Some(approval_id.clone()),
+                    ctx.command_cancellation.clone(),
                     Some(environment_id.clone()),
                     command.clone(),
                     cwd.clone().into(),
@@ -873,6 +878,7 @@ impl Session {
                     ExecApprovalKind::Command,
                     ctx.call_id.clone(),
                     /*approval_id*/ None,
+                    /*command_cancellation*/ None,
                     Some(environment_id.clone()),
                     command.clone(),
                     cwd.clone().into(),

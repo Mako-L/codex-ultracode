@@ -760,6 +760,7 @@ impl NetworkApprovalService {
         };
         let approval_context = ApprovalContext {
             review_context,
+            command_cancellation: None,
             cancellation_token: None,
             call_id: approval_call_id,
             tool_name: telemetry_tool_name.clone(),

@@ -1486,6 +1486,7 @@ async fn maybe_request_mcp_tool_approval(
     };
     let approval_context = ApprovalContext {
         review_context: GuardianReviewContext::from(step_context),
+        command_cancellation: None,
         cancellation_token: Some(cancellation_token.clone()),
         call_id: call_id.to_string(),
         tool_name: invocation_tool_name.clone(),
