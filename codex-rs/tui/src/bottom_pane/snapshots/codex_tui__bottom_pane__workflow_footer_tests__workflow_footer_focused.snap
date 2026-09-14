@@ -1,10 +1,10 @@
 ---
-source: tui/src/bottom_pane/mod.rs
-assertion_line: 2186
-expression: "render_snapshot(&pane, Rect::new(0, 0, 96, 8))"
+source: tui/src/bottom_pane/workflow_footer_tests.rs
+assertion_line: 23
+expression: "super::tests::snapshot_buffer(&buf)"
 ---
                                                                                                 
 › Ask Codex to do anything                                                                      
                                                                                                 
   gpt-6-astra xhigh · project                                                                   
-   1 workflow · 26 agents · ⚠ Large workflow · /workflows to stop
+› ● repair · 0/1 agents · running · /workflows · enter open · ↑ back
