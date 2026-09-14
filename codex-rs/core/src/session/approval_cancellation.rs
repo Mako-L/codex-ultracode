@@ -62,51 +62,5 @@ impl Session {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::session::SessionSettingsUpdate;
-    use crate::session::tests::make_session_and_context;
-    use crate::session::turn_context::NewTurnContextOptions;
-
-    #[tokio::test]
-    async fn command_cancellation_is_scoped_to_its_turn() {
-        let (session, first_turn) = make_session_and_context().await;
-        let (second_turn, _) = session
-            .new_turn_with_sub_id(
-                "second-turn".to_string(),
-                SessionSettingsUpdate::default(),
-                NewTurnContextOptions::default(),
-            )
-            .await
-            .expect("create second turn");
-        let call_id = "reused-call-id";
-
-        session
-            .register_command_approval_cancellation(&first_turn, call_id)
-            .await;
-        let first_cancellation = session
-            .state
-            .lock()
-            .await
-            .command_approval_cancellations
-            .get(&(first_turn.sub_id.clone(), call_id.to_string()))
-            .cloned()
-            .expect("first turn cancellation marker");
-        first_cancellation.store(true, Ordering::Release);
-
-        session
-            .register_command_approval_cancellation(&second_turn, call_id)
-            .await;
-
-        assert!(
-            !session
-                .take_command_approval_cancellation(&second_turn, call_id)
-                .await
-        );
-        assert!(
-            session
-                .take_command_approval_cancellation(&first_turn, call_id)
-                .await
-        );
-    }
-}
+#[path = "approval_cancellation_tests.rs"]
+mod tests;
