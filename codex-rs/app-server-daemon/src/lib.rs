@@ -7,6 +7,7 @@ mod update_loop;
 mod workflow_backend;
 pub use workflow_backend::ensure_workflow_backend;
 pub use workflow_backend::workflow_backend_socket_path;
+pub use workflow_backend::workflow_backend_state_dir;
 
 use std::path::Path;
 use std::path::PathBuf;
