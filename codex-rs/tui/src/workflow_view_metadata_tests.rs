@@ -44,7 +44,7 @@ fn worker_detail_falls_back_to_workspace_isolation_and_cleans_metadata() {
 
     let rows = detail_rows(&worker, 100, false);
 
-    assert_eq!(rows[0], "✻ running · gpt-5.6-luna · Explore · worktree");
+    assert_eq!(rows[0], "✻ Running · gpt-5.6-luna · Explore · worktree");
 }
 
 #[test]
@@ -71,8 +71,27 @@ fn worker_detail_shows_journal_replay_before_retry_metadata() {
         "lastAttemptReason": "user-retry",
     });
     let rows = detail_rows(&worker, 100, false);
-    assert_eq!(
-        rows[0],
-        "✔ Completed · gpt-5.6-luna · from journal · attempt 2 (user retry)"
-    );
+    insta::assert_snapshot!(rows[0], @r"✔ Completed · gpt-5.6-luna · from resume journal · attempt 2 (user retry)");
+}
+
+#[test]
+fn queued_worker_detail_reports_waiting_time() {
+    let worker = json!({
+        "status": "queued", "model": "gpt-5.6-luna",
+        "queuedAt": chrono::Utc::now().timestamp_millis() - 62_000,
+    });
+    let rows = detail_rows(&worker, 100, false);
+    assert_eq!(rows[0], "◌ Queued · gpt-5.6-luna");
+    assert!(rows[1].starts_with("waiting 1m "));
+}
+
+#[test]
+fn running_worker_detail_reports_idle_time_after_thirty_seconds() {
+    let worker = json!({
+        "status": "running", "model": "gpt-5.6-luna",
+        "lastProgressAt": chrono::Utc::now().timestamp_millis() - 62_000,
+    });
+    let rows = detail_rows(&worker, 100, false);
+    assert_eq!(rows[0], "✻ Running · gpt-5.6-luna");
+    assert!(rows[1].starts_with("idle 1m "));
 }

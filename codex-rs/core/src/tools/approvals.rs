@@ -55,6 +55,7 @@ use tracing::warn;
 #[derive(Clone)]
 pub(crate) struct ApprovalContext {
     pub(crate) review_context: GuardianReviewContext,
+    // The originating command can outlive its turn; the reviewer may belong to a newer turn.
     pub(crate) command_cancellation: Option<Arc<AtomicBool>>,
     pub(crate) cancellation_token: Option<CancellationToken>,
     pub(crate) call_id: String,
