@@ -75,7 +75,9 @@ fn read_token(path: &Path) -> io::Result<Value> {
 }
 
 pub(crate) async fn connect(home: &Path) -> io::Result<UltracodeBridge> {
-    let directory = home.join("ultracode");
+    let directory =
+        codex_app_server_daemon::workflow_backend_state_dir(home, &std::env::current_exe()?)
+            .map_err(io::Error::other)?;
     std::fs::create_dir_all(&directory)?;
     let socket = directory.join("host.sock");
     let stream = match std::os::unix::net::UnixStream::connect(&socket) {
@@ -113,7 +115,10 @@ pub(crate) async fn connect(home: &Path) -> io::Result<UltracodeBridge> {
                 if tokio::time::Instant::now() >= deadline {
                     return Err(io::Error::new(
                         io::ErrorKind::TimedOut,
-                        "workflow host did not become ready; inspect ultracode/host.log",
+                        format!(
+                            "workflow host did not become ready; inspect {}",
+                            directory.join("host.log").display()
+                        ),
                     ));
                 }
                 // Another simultaneous frontend may own startup; its socket is equally usable.
@@ -158,7 +163,9 @@ pub(crate) async fn attach(
 }
 
 pub async fn run(home: PathBuf) -> io::Result<()> {
-    let directory = home.join("ultracode");
+    let directory =
+        codex_app_server_daemon::workflow_backend_state_dir(&home, &std::env::current_exe()?)
+            .map_err(io::Error::other)?;
     std::fs::create_dir_all(&directory)?;
     let lock = OpenOptions::new()
         .write(true)

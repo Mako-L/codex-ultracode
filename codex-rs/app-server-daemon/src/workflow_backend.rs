@@ -1,11 +1,34 @@
 //! A workflow backend uses the launching fork without modifying the managed stock install.
 use super::*;
+use sha2::Digest;
+use sha2::Sha256;
+use std::io::Read;
+
+/// Keep each executable's backend and supervisor separate, including across upgrades.
+pub fn workflow_backend_state_dir(codex_home: &Path, codex_bin: &Path) -> Result<PathBuf> {
+    let codex_bin = codex_bin.canonicalize()?;
+    let mut digest = Sha256::new();
+    digest.update(codex_bin.as_os_str().as_encoded_bytes());
+    digest.update([0]);
+    let mut binary = std::fs::File::open(&codex_bin)?;
+    let mut buffer = [0_u8; 65536];
+    loop {
+        let count = binary.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    let identity = format!("{:x}", digest.finalize());
+    Ok(codex_home
+        .canonicalize()?
+        .join("ultracode-daemon")
+        .join(&identity[..16]))
+}
 
 /// Resolve the workflow backend's control socket separately from the stock daemon.
 pub fn workflow_backend_socket_path(codex_home: &Path) -> Result<PathBuf> {
-    Ok(codex_home
-        .canonicalize()?
-        .join("ultracode-daemon/control.sock"))
+    Ok(workflow_backend_state_dir(codex_home, &std::env::current_exe()?)?.join("control.sock"))
 }
 
 /// Start or reuse the fork-owned daemon using the existing process locks and PID checks.
@@ -14,8 +37,8 @@ pub async fn ensure_workflow_backend(codex_home: &Path, codex_bin: &Path) -> Res
     ensure_supported_platform()?;
     let codex_home = codex_home.canonicalize()?;
     let codex_bin = codex_bin.canonicalize()?;
-    let socket_path = workflow_backend_socket_path(&codex_home)?;
-    let state_dir = codex_home.join("ultracode-daemon");
+    let state_dir = workflow_backend_state_dir(&codex_home, &codex_bin)?;
+    let socket_path = state_dir.join("control.sock");
     let daemon = Daemon {
         socket_path: socket_path.clone(),
         backend_socket_path: Some(socket_path.clone()),
