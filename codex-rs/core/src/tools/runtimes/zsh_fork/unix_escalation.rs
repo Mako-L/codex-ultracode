@@ -221,12 +221,6 @@ fn execve_prompt_is_rejected_by_policy(
 }
 
 impl CoreShellActionProvider {
-    async fn command_cancellation(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
-        self.session
-            .command_approval_cancellation(self.review_context.turn(), &self.call_id)
-            .await
-    }
-
     async fn approval_context(
         &self,
         review_context: GuardianReviewContext,
@@ -234,7 +228,10 @@ impl CoreShellActionProvider {
     ) -> ApprovalContext {
         ApprovalContext {
             review_context,
-            command_cancellation: self.command_cancellation().await,
+            command_cancellation: self
+                .session
+                .command_approval_cancellation(self.review_context.turn(), &self.call_id)
+                .await,
             // The running process can outlive its launching tool or code-mode cell.
             cancellation_token: None,
             call_id: self.call_id.clone(),
@@ -317,10 +314,7 @@ impl CoreShellActionProvider {
                     })?;
                 let approval_ctx = self
                     .approval_context(
-                        GuardianReviewContext::from_resolved_settings(
-                        turn_context,
-                        &step_settings,
-                        ),
+                        GuardianReviewContext::from_resolved_settings(turn_context, &step_settings),
                         strict_auto_review,
                     )
                     .await;

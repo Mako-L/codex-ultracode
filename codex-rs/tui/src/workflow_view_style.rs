@@ -7,6 +7,9 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use unicode_width::UnicodeWidthStr;
 
+#[path = "workflow_detail_style.rs"]
+pub(crate) mod detail;
+
 #[cfg(test)]
 #[path = "workflow_view_style_tests.rs"]
 mod tests;
@@ -69,6 +72,14 @@ fn symbols(text: &str, base: Style) -> Vec<Span<'static>> {
 pub(crate) fn styled_lines(
     lines: Vec<String>,
     worker_label_width: Option<usize>,
+) -> Vec<Line<'static>> {
+    styled_lines_with_detail(lines, worker_label_width, /*detail*/ None)
+}
+
+pub(crate) fn styled_lines_with_detail(
+    lines: Vec<String>,
+    worker_label_width: Option<usize>,
+    mut detail: Option<detail::Context<'_>>,
 ) -> Vec<Line<'static>> {
     let divider = lines
         .iter()
@@ -170,7 +181,11 @@ pub(crate) fn styled_lines(
                     } else {
                         cell
                     };
-                    if column == 1
+                    if column == 2
+                        && let Some(context) = detail.as_mut()
+                    {
+                        spans.extend(detail::cell_spans(cell, context));
+                    } else if column == 1
                         && let Some(separator) = cell
                             .strip_prefix("❯ ")
                             .and_then(|rest| rest.find(' ').map(|offset| offset + "❯ ".len()))

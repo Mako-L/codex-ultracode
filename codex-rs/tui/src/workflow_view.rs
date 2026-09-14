@@ -11,7 +11,22 @@ use std::cell::Cell;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-const FILTERS: [&str; 6] = ["all", "failed", "running", "completed", "stopped", "queued"];
+#[path = "workflow_worker_timing.rs"]
+mod worker_timing;
+
+#[path = "workflow_worker_activity.rs"]
+mod worker_activity;
+
+const FILTERS: [&str; 8] = [
+    "all",
+    "running",
+    "queued",
+    "failed",
+    "completed",
+    "skipped",
+    "blocked",
+    "stopped",
+];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum WorkflowScreen {
@@ -77,6 +92,7 @@ mod updates;
 pub(crate) struct WorkflowView {
     snapshot: Value,
     detail_scroll_limit: Cell<usize>,
+    detail_section: Cell<crate::workflow_view_style::detail::Section>,
     pub(crate) styles_enabled: bool,
     pub state: WorkflowViewState,
 }
@@ -87,6 +103,7 @@ impl WorkflowView {
         Self {
             snapshot,
             detail_scroll_limit: Cell::new(0),
+            detail_section: Cell::new(crate::workflow_view_style::detail::Section::Metadata),
             styles_enabled: true,
             state: view.unwrap_or(WorkflowViewState {
                 screen: if count == 1 {
@@ -234,6 +251,11 @@ impl WorkflowView {
                 .unwrap_or_default();
             return None;
         }
+        if self.state.screen == WorkflowScreen::Picker
+            && matches!(key.code, KeyCode::Char('p' | 'x' | 'r'))
+        {
+            return None;
+        }
         let status = self
             .run()
             .and_then(|r| r["status"].as_str())
@@ -252,7 +274,14 @@ impl WorkflowView {
             {
                 self.workers()
                     .get(self.state.worker)
+                    .filter(|w| {
+                        matches!(
+                            w["status"].as_str(),
+                            Some("running" | "queued" | "preparing")
+                        )
+                    })
                     .and_then(|w| w["id"].as_str())
+                    .filter(|id| !id.is_empty())
                     .map(str::to_string)
             } else {
                 None
@@ -266,7 +295,10 @@ impl WorkflowView {
             return Some(WorkflowAction::StopRun { run_id, worker_id });
         }
         if key.code == KeyCode::Char('r')
-            && self.state.screen == WorkflowScreen::Detail
+            && status == "running"
+            && (self.state.screen == WorkflowScreen::Detail
+                || (self.state.screen == WorkflowScreen::Overview
+                    && self.state.focus == WorkflowFocus::Workers))
             && let Some(w) = self.workers().get(self.state.worker)
             && w["status"] == "running"
             && w["id"].as_str().is_some_and(|id| !id.is_empty())
@@ -657,23 +689,26 @@ fn worker_row(w: &Value, size: usize, label_width: usize) -> String {
 }
 fn detail_rows(w: &Value, size: usize, expanded: bool) -> Vec<String> {
     let status = w["status"].as_str().unwrap_or_default();
-    let heading = if status == "completed" {
-        "Completed"
-    } else if status == "failed" {
-        "Failed"
-    } else {
-        status
+    let heading = match status {
+        "completed" => "Completed",
+        "failed" => "Failed",
+        "queued" | "preparing" => "Queued",
+        "running" => "Running",
+        "stopped" | "interrupted" => "Stopped",
+        "skipped" => "Skipped",
+        "blocked" => "Blocked",
+        _ => status,
     };
     let attempt = w["attempt"]
         .as_u64()
         .filter(|attempt| *attempt > 1)
         .map(|attempt| {
-            let reason = if w["lastAttemptReason"] == "user-retry" {
-                " (user retry)"
-            } else {
-                ""
+            let reason = match w["lastAttemptReason"].as_str() {
+                Some("user-retry") => "user retry",
+                Some("throttled") => "throttled",
+                _ => "stalled",
             };
-            format!(" · attempt {attempt}{reason}")
+            format!(" · attempt {attempt} ({reason})")
         })
         .unwrap_or_default();
     let mut metadata = Vec::new();
@@ -707,113 +742,95 @@ fn detail_rows(w: &Value, size: usize, expanded: bool) -> Vec<String> {
         metadata.push(isolation);
     }
     if w["cached"].as_bool() == Some(true) {
-        metadata.push("from journal".to_string());
+        metadata.push("from resume journal".to_string());
     }
     let metadata = if metadata.is_empty() {
         String::new()
     } else {
         format!(" · {}", metadata.join(" · "))
     };
-    let tools = w["toolCalls"]
-        .as_u64()
-        .filter(|count| *count > 0)
-        .map(|count| format!(" · {count} tool call{}", if count == 1 { "" } else { "s" }))
-        .unwrap_or_default();
-    let mut out = vec![
-        format!(
-            "{} {heading} · {}{metadata}{attempt}",
-            mark(Some(status)),
-            clean(w["model"].as_str().unwrap_or_default())
-        ),
-        format!("{} tok{tools} · {}", token_text(token_total(w)), elapsed(w)),
-        String::new(),
-        "Prompt".into(),
-    ];
+    let glyph = match status {
+        "stopped" | "interrupted" => "◌",
+        "skipped" | "blocked" => "✘",
+        _ => mark(Some(status)),
+    };
+    let model = w["model"]
+        .as_str()
+        .map(clean)
+        .filter(|model| !model.is_empty());
+    let model = model.map(|model| format!(" · {model}")).unwrap_or_default();
+    let mut out = vec![format!("{glyph} {heading}{model}{metadata}{attempt}")];
+    if let Some(metrics) = worker_timing::detail_metrics(w, chrono::Utc::now()) {
+        out.push(metrics);
+    }
+    out.extend([String::new(), "Prompt".into()]);
     let prompt = wrap(
         w["prompt"].as_str().unwrap_or_default(),
         size.saturating_sub(2).max(1),
     );
-    out.extend(prompt.into_iter().map(|v| format!("  {v}")));
-    out.extend([String::new(), "Activity".into()]);
-    let activity = w["activity"].as_array().map(Vec::as_slice).unwrap_or(&[]);
-    let mut activity_out = Vec::new();
-    for item in activity {
-        let kind = item["type"].as_str().unwrap_or_default();
-        if !kind.contains("tool")
-            && !kind.contains("Tool")
-            && !kind.contains("command")
-            && !kind.contains("Command")
-            && !kind.contains("file")
-            && !kind.contains("File")
-        {
-            continue;
-        }
-        let joined_command = item["command"].as_array().map(|parts| {
-            parts
-                .iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<_>>()
-                .join(" ")
-        });
-        let command = joined_command
-            .as_deref()
-            .or_else(|| item["command"].as_str())
-            .or_else(|| item["toolName"].as_str())
-            .or_else(|| item["name"].as_str())
-            .or_else(|| item["title"].as_str())
-            .or_else(|| item["message"].as_str())
-            .unwrap_or(kind);
-        activity_out.extend(wrap(command, size.saturating_sub(2).max(1)));
-        let state = [
-            item["status"].as_str().map(str::to_string),
-            item["exitCode"].as_i64().map(|v| format!("exit {v}")),
-        ]
-        .into_iter()
-        .flatten()
-        .filter(|v| !v.is_empty())
-        .collect::<Vec<_>>()
-        .join(" · ");
-        if !state.is_empty() {
-            activity_out.extend(wrap(&state, size.saturating_sub(2).max(1)))
-        }
-        if expanded {
-            if let Some(input) = item.get("input") {
-                activity_out.extend(wrap(
-                    &format!("Input: {input}"),
-                    size.saturating_sub(2).max(1),
-                ))
-            }
-            if let Some(value) = item["aggregatedOutput"].as_str() {
-                activity_out.push("Output:".into());
-                activity_out.extend(
-                    wrap(value, size.saturating_sub(2).max(1))
-                        .into_iter()
-                        .take(8),
-                );
-            }
-        }
+    if prompt.len() > 2 {
+        *out.last_mut().expect("prompt heading") = format!(
+            "Prompt · {} lines{}",
+            prompt.len(),
+            if expanded { "" } else { " · ⏎ expand" }
+        );
     }
-    if activity_out.is_empty() {
-        out.push("  No tool calls.".into())
+    if w["prompt"].as_str().is_none_or(str::is_empty) {
+        out.push(format!(
+            "  {}",
+            match status {
+                "queued" | "preparing" => "Available once the agent starts.",
+                "running" => "Not available yet (agent still running).",
+                _ => "Transcript not available.",
+            }
+        ));
     } else {
-        out.extend(activity_out.into_iter().map(|v| format!("  {v}")))
+        let visible = if expanded { prompt.len() } else { 2 };
+        out.extend(prompt.iter().take(visible).map(|v| format!("  {v}")));
+        if !expanded && prompt.len() > visible {
+            let remaining = prompt.len() - visible;
+            out.push(format!(
+                "  … {remaining} more {}",
+                if remaining == 1 { "line" } else { "lines" }
+            ));
+        }
     }
+    if matches!(status, "queued" | "preparing") {
+        out.extend([
+            String::new(),
+            "Outcome".into(),
+            "  Waiting for an agent slot.".into(),
+        ]);
+        return out;
+    }
+    out.push(String::new());
+    out.extend(worker_activity::activity_rows(w, size));
     out.extend([String::new(), "Outcome".into()]);
-    let outcome = w["error"]
-        .as_str()
-        .or_else(|| w["text"].as_str())
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            w["output"].as_str().map(str::to_string).unwrap_or_else(|| {
+    let outcome = if matches!(status, "failed" | "blocked") {
+        w["error"].as_str().unwrap_or("failed").to_string()
+    } else {
+        w["text"]
+            .as_str()
+            .filter(|text| !text.is_empty())
+            .or_else(|| w["output"].as_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| {
                 if w["output"].is_null() {
                     String::new()
                 } else {
                     w["output"].to_string()
                 }
             })
-        });
+    };
+    let outcome = match status {
+        "running" => "Still running…",
+        "stopped" | "interrupted" => "The workflow stopped before this agent finished.",
+        "skipped" => "Skipped by user.",
+        "completed" if outcome.is_empty() => "(empty)",
+        _ => &outcome,
+    };
     out.extend(
-        wrap(&outcome, size.saturating_sub(2).max(1))
+        wrap(outcome, size.saturating_sub(2).max(1))
             .into_iter()
             .map(|v| format!("  {v}")),
     );
@@ -872,7 +889,11 @@ fn render_overview(view: &WorkflowView, width: usize, height: usize) -> Vec<Stri
             "{} · showing {} {}",
             phase,
             workers.len(),
-            view.state.filter
+            match view.state.filter.as_str() {
+                "completed" => "done",
+                "stopped" => "interrupted",
+                filter => filter,
+            }
         )
     };
     let mut out = vec![
@@ -986,6 +1007,11 @@ fn render_overview(view: &WorkflowView, width: usize, height: usize) -> Vec<Stri
     } else {
         0
     };
+    view.detail_section
+        .set(crate::workflow_view_style::detail::section_before(
+            &right_lines,
+            right_offset,
+        ));
     let phase_width = phases.iter().map(|p| cell_width(p)).max().unwrap_or(0);
     for row in 0..body_rows {
         let index = row + left_offset;
@@ -1085,25 +1111,27 @@ fn render_overview(view: &WorkflowView, width: usize, height: usize) -> Vec<Stri
         "─".repeat(right_width.saturating_sub(cell_width(&scroll_range))),
         scroll_range
     ));
+    let restart = if run["status"] == "running"
+        && (view.state.screen == WorkflowScreen::Detail
+            || view.state.focus == WorkflowFocus::Workers)
+        && workers.get(view.state.worker).is_some_and(|worker| {
+            worker["status"] == "running" && worker["id"].as_str().is_some_and(|id| !id.is_empty())
+        }) {
+        " · r restart"
+    } else {
+        ""
+    };
     let controls = if view.state.screen == WorkflowScreen::Detail {
         format!(
-            "↑↓ agent{}{}",
+            "↑↓ agent{}{restart}",
             if detail_scroll_limit > 0 {
                 " · j/k scroll"
             } else {
                 ""
             },
-            if workers
-                .get(view.state.worker)
-                .is_some_and(|w| w["status"] == "running")
-            {
-                " · r restart"
-            } else {
-                ""
-            }
         )
     } else {
-        "↑↓ select".into()
+        format!("↑↓ select{restart}")
     };
     let filter = if view.state.screen != WorkflowScreen::Overview
         || view.state.focus != WorkflowFocus::Workers
@@ -1112,9 +1140,32 @@ fn render_overview(view: &WorkflowView, width: usize, height: usize) -> Vec<Stri
     } else if view.state.filter == "all" {
         " · f filter".into()
     } else {
-        format!(" · f filter: {}", view.state.filter)
+        format!(
+            " · f filter: {}",
+            match view.state.filter.as_str() {
+                "completed" => "done",
+                "stopped" => "interrupted",
+                filter => filter,
+            }
+        )
     };
+    let selected_worker_can_stop = workers.get(view.state.worker).is_some_and(|worker| {
+        matches!(
+            worker["status"].as_str(),
+            Some("running" | "queued" | "preparing")
+        ) && worker["id"].as_str().is_some_and(|id| !id.is_empty())
+    });
     let lifecycle = match run["status"].as_str() {
+        Some("running")
+            if view.state.screen == WorkflowScreen::Detail
+                || view.state.focus == WorkflowFocus::Workers =>
+        {
+            if selected_worker_can_stop {
+                " · p pause · x stop"
+            } else {
+                " · p pause"
+            }
+        }
         Some("running") => " · p pause · x stop",
         Some("paused") => " · p resume",
         _ => "",
@@ -1137,7 +1188,21 @@ impl Widget for &WorkflowView {
         });
         let lines = self.lines(area.width as usize, area.height as usize);
         let lines = if self.styles_enabled {
-            crate::workflow_view_style::styled_lines(lines, label_width)
+            if self.state.screen == WorkflowScreen::Detail {
+                let detail = self
+                    .workers()
+                    .get(self.state.worker)
+                    .copied()
+                    .map(|worker| crate::workflow_view_style::detail::Context {
+                        status: worker["status"].as_str().unwrap_or_default(),
+                        section: self.detail_section.get(),
+                        empty_result: worker["text"].as_str().is_none_or(str::is_empty)
+                            && (worker["output"].is_null() || worker["output"] == ""),
+                    });
+                crate::workflow_view_style::styled_lines_with_detail(lines, label_width, detail)
+            } else {
+                crate::workflow_view_style::styled_lines(lines, label_width)
+            }
         } else {
             lines.into_iter().map(Line::raw).collect()
         };
@@ -1230,6 +1295,14 @@ mod restart_tests;
 #[cfg(test)]
 #[path = "workflow_view_metadata_tests.rs"]
 mod metadata_tests;
+
+#[cfg(test)]
+#[path = "workflow_view_reference_states_tests.rs"]
+mod reference_states_tests;
+
+#[cfg(test)]
+#[path = "workflow_detail_style_tests.rs"]
+mod detail_style_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1588,6 +1661,7 @@ mod tests {
     #[test]
     fn reducer_navigation_and_running_worker_restart() {
         let mut v = WorkflowView::new(json!({"runs":[run()]}), None);
+        v.snapshot["runs"][0]["status"] = json!("running");
         assert_eq!(v.handle_key(KeyEvent::from(KeyCode::Char('r'))), None);
         v.handle_key(KeyEvent::from(KeyCode::Right));
         v.state.worker = 1;
@@ -1745,7 +1819,7 @@ mod tests {
     }
 
     #[test]
-    fn expanded_activity_wraps_and_keeps_unicode_borders_aligned() {
+    fn activity_summaries_clip_and_keep_unicode_borders_aligned() {
         let mut item = run();
         item["workers"][0]["label"] = json!("工😀worker");
         item["workers"][0]["activity"] = json!([{"type":"command_execution","command":["cargo","test","--very-long-option"],"status":"completed","exitCode":0,"input":{"unsafe":"\u{1b}[31mred"},"aggregatedOutput":"first line with many words that must wrap inside the detail pane\nsecond line"}]);
@@ -1753,9 +1827,9 @@ mod tests {
         v.state.screen = WorkflowScreen::Detail;
         v.state.expanded = true;
         let output = text(&v, 52, 28);
-        assert!(output.contains("cargo test"), "{output}");
-        assert!(output.contains("--very-long-option"), "{output}");
-        assert!(output.contains("Output:"));
+        assert!(output.contains("exec_command("), "{output}");
+        assert!(!output.contains("--very-long-option"), "{output}");
+        assert!(!output.contains("Output:"));
         assert!(!output.contains("\u{1b}"));
         assert!(
             output

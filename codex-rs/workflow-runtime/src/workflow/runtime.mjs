@@ -189,7 +189,7 @@ export async function runWorkflow(options) {
       if(asynchronousPreparation)replayDecision=new Promise(resolve=>{finishDecision=resolve;});
       const preparationStop=new AbortController();
       preparationStops.set(workerId,preparationStop);
-      let worker=asynchronousPreparation?{id:workerId,label:workerOptions.label??`Agent ${index+1}`,phase:workerPhase,agentType,readOnly,isolation:isolated?'worktree':null,prompt,model,effort,status:'preparing',options:workerOptions,activity:[]}:null;
+      let worker=asynchronousPreparation?{id:workerId,label:workerOptions.label??`Agent ${index+1}`,phase:workerPhase,agentType,readOnly,isolation:isolated?'worktree':null,prompt,model,effort,status:'preparing',queuedAt:Date.now(),options:workerOptions,activity:[]}:null;
       if(worker){state.workers.push(worker);if(!state.phases.some(p=>p.name===workerPhase))state.phases.push({name:workerPhase});save();}
       const releaseLateWorkspace=workspace=>{
         if(!options.nativeWorkspace||typeof workspace?.workspaceId!=='string')return;
@@ -253,7 +253,7 @@ export async function runWorkflow(options) {
       if(pendingRecovery.size&&!recoverable){const recoveryError=new Error('Recovery blocked: unresolved worker termination prevents replacing this call');await releaseWorkspace(workspace);preparationStops.delete(workerId);finishDecision?.();throw recoveryError;}
       preparationStops.delete(workerId);
       finishDecision?.();
-      const details={signature,status:'queued',...(options.nativeWorkspace?{readOnly,workspace:{workspaceId:workspace.workspaceId,cwd:workspace.cwd,isolated:workspace.isolated,baseCommit:workspace.baseCommit??null,roleDigest:workspace.roleDigest},workspaceId:workspace.workspaceId,authorityGeneration:workspace.authorityGeneration,roleDigest:workspace.roleDigest,...(workspace.baseCommit?{baseCommit:workspace.baseCommit}:{}),...(workspace.isolated?{worktree:workspace.cwd}:{})}:{sandbox,...(recoverable&&cached.worktree?{worktree:cached.worktree,baseCommit:cached.baseCommit}:{})})};
+      const details={signature,status:'queued',queuedAt:worker?.queuedAt??Date.now(),...(options.nativeWorkspace?{readOnly,workspace:{workspaceId:workspace.workspaceId,cwd:workspace.cwd,isolated:workspace.isolated,baseCommit:workspace.baseCommit??null,roleDigest:workspace.roleDigest},workspaceId:workspace.workspaceId,authorityGeneration:workspace.authorityGeneration,roleDigest:workspace.roleDigest,...(workspace.baseCommit?{baseCommit:workspace.baseCommit}:{}),...(workspace.isolated?{worktree:workspace.cwd}:{})}:{sandbox,...(recoverable&&cached.worktree?{worktree:cached.worktree,baseCommit:cached.baseCommit}:{})})};
       if(worker)Object.assign(worker,details);else{worker={id:workerId,label:workerOptions.label??`Agent ${index+1}`,phase:workerPhase,agentType,isolation:isolated?'worktree':null,prompt,model,effort,options:workerOptions,activity:[],...details};state.workers.push(worker);}
       if(!state.phases.some(p=>p.name===workerPhase))state.phases.push({name:workerPhase});
       let recoverThread=recoverable&&cached.status==='interrupted'?cached.threadId:undefined;
@@ -280,6 +280,7 @@ export async function runWorkflow(options) {
       };
       const updateWorker=update=>{
         const {usage,...fields}=update;
+        worker.lastProgressAt=Date.now();
         Object.assign(worker,Object.fromEntries(Object.entries(fields).filter(([,value])=>value!==undefined)));
         if(update.status!==undefined){worker.rawStatus=update.status;worker.status=normalizeWorkerStatus(update.status);}
         account(update);
@@ -302,7 +303,7 @@ export async function runWorkflow(options) {
             worker.restart=false;worker.stopRequested=false;
             aborter=new AbortController();active.set(worker.id,aborter);
             if(controller.signal.aborted)aborter.abort();
-            durationTick=Date.now();worker.status='running';worker.startedAt??=now();worker.launchIntent=true;account({});save();
+            durationTick=Date.now();worker.lastProgressAt=durationTick;worker.status='running';worker.startedAt??=now();worker.launchIntent=true;account({});save();
             let workerCwd=workspace?.cwd??cwd;
             if(!options.nativeWorkspace&&isolated&&!worker.worktree) {
               workerCwd=path.join(runDirectory(stateDir,id),`worktree-${index+1}${old?`-attempt-${state.attempt}`:''}`);

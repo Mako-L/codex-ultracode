@@ -9,8 +9,8 @@ use super::join_program_and_argv;
 use crate::config::Constrained;
 use crate::guardian::GuardianReviewContext;
 use crate::sandboxing::SandboxPermissions;
-use crate::session::tests::make_session_and_context;
 use crate::session::SessionSettingsUpdate;
+use crate::session::tests::make_session_and_context;
 use crate::session::turn_context::NewTurnContextOptions;
 use crate::tools::runtimes::tests::test_credential_broker_network_proxy;
 use anyhow::Context;
@@ -137,7 +137,10 @@ async fn execve_cancellation_uses_launching_turn_marker() -> anyhow::Result<()> 
     let approval_context = provider
         .approval_context(GuardianReviewContext::from(second_turn.clone()), false)
         .await;
-    assert_eq!(approval_context.review_context.turn().sub_id, second_turn.sub_id);
+    assert_eq!(
+        approval_context.review_context.turn().sub_id,
+        second_turn.sub_id
+    );
     approval_context
         .command_cancellation
         .expect("launching turn cancellation marker")
