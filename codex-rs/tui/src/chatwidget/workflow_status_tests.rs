@@ -2,6 +2,23 @@ use super::*;
 use serde_json::json;
 
 #[test]
+fn main_view_names_running_workflow_and_updates_progress() {
+    let mut snapshot = json!({"runs":[{"name":"repair-project","status":"running","workers":[{"status":"completed"},{"status":"running"},{"status":"pending"}]}]});
+    let settings = WorkflowWarningSettings::default();
+    let running = workflow_status_line(&snapshot, &settings)
+        .unwrap()
+        .to_string();
+    insta::assert_snapshot!("main_view_running_workflow", running);
+    snapshot["runs"][0]["status"] = json!("paused");
+    let paused = workflow_status_line(&snapshot, &settings)
+        .unwrap()
+        .to_string();
+    insta::assert_snapshot!("main_view_paused_workflow", paused);
+    snapshot["runs"][0]["status"] = json!("completed");
+    assert!(workflow_status_line(&snapshot, &settings).is_none());
+}
+
+#[test]
 fn workflow_footer_warns_from_real_progress_and_clears_terminal_runs() {
     let mut snapshot = json!({"runs":[{"status":"running","workers":vec![json!({"startedAt":"now","usage":{"totalTokens":1}});26]}]});
     let line = workflow_status_line(&snapshot, &WorkflowWarningSettings::default())
