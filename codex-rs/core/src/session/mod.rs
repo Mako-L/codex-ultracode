@@ -2655,7 +2655,7 @@ impl Session {
                 .lock()
                 .await
                 .command_approval_cancellations
-                .get(&call_id)
+                .get(&(turn_context.sub_id.clone(), call_id.clone()))
                 .cloned()
         } else {
             None

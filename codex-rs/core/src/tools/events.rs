@@ -108,7 +108,7 @@ fn tracker_update_for_known_delta<'a>(
 async fn emit_exec_command_begin(ctx: ToolEventCtx<'_>, exec_input: &ExecCommandInput<'_>) {
     if exec_input.source != ExecCommandSource::UnifiedExecInteraction {
         ctx.session
-            .register_command_approval_cancellation(ctx.call_id)
+            .register_command_approval_cancellation(ctx.turn, ctx.call_id)
             .await;
     }
     if exec_input.source == ExecCommandSource::UnifiedExecStartup
@@ -573,7 +573,7 @@ async fn emit_exec_end(
     if exec_input.source != ExecCommandSource::UnifiedExecInteraction
         && ctx
             .session
-            .take_command_approval_cancellation(ctx.call_id)
+            .take_command_approval_cancellation(ctx.turn, ctx.call_id)
             .await
     {
         exec_result.status = ExecCommandStatus::Declined;

@@ -34,7 +34,7 @@ use tokio_util::task::AbortOnDropHandle;
 /// Persistent, session-scoped state previously stored directly on `Session`.
 pub(crate) struct SessionState {
     /// Live command cancellation signals also cover processes that outlive their turn.
-    pub(crate) command_approval_cancellations: HashMap<String, Arc<AtomicBool>>,
+    pub(crate) command_approval_cancellations: HashMap<(String, String), Arc<AtomicBool>>,
     pub(crate) session_configuration: SessionConfiguration,
     /// Persisted origin of the session base instructions, when known.
     pub(crate) base_instructions_provenance: Option<BaseInstructionsProvenance>,
