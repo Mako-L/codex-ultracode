@@ -1,10 +1,10 @@
 ---
 source: tui/src/bottom_pane/mod.rs
+assertion_line: 2130
 expression: "render_snapshot(&pane, Rect::new(0, 0, 96, 8))"
 ---
-  1 workflow · 26 agents · ⚠ Large workflow · /workflows to stop                                
-                                                                                                
                                                                                                 
 › Ask Codex to do anything                                                                      
                                                                                                 
-  ? for shortcuts                                                            100% context left
+  gpt-6-astra xhigh · project                                                                   
+  1 workflow · 26 agents · ⚠ Large workflow · /workflows to stop
