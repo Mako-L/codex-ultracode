@@ -997,7 +997,7 @@ async fn known_thread_started_preserves_session_without_reading_unmaterialized_r
 
 #[tokio::test]
 async fn startup_thread_started_submits_queued_startup_input() {
-    let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+    let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
     app.pending_startup_thread_start = true;
     app.chat_widget
         .set_queue_submissions_until_session_configured(/*queue*/ true);
@@ -1028,6 +1028,21 @@ async fn startup_thread_started_submits_queued_startup_input() {
     )
     .await
     .expect("startup thread should attach");
+
+    let mut attached_workflows = false;
+    while let Ok(event) = app_event_rx.try_recv() {
+        if let AppEvent::Workflow(crate::app_event::WorkflowEvent::LoadCatalog {
+            thread_id: workflow_thread_id,
+        }) = event
+        {
+            assert_eq!(workflow_thread_id, thread_id.to_string());
+            attached_workflows = true;
+        }
+    }
+    assert!(
+        attached_workflows,
+        "fresh startup must attach workflow updates without opening /workflows"
+    );
 
     match next_user_turn_op(&mut op_rx) {
         Op::UserTurn { items, .. } => assert_eq!(

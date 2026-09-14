@@ -789,6 +789,13 @@ impl App {
                 let recovery_was_pending = self.chat_widget.hold_rate_limit_recovery();
                 self.enqueue_primary_thread_session(started.session, started.turns)
                     .await?;
+                if !self.config.disable_workflows {
+                    self.app_event_tx.send(AppEvent::Workflow(
+                        crate::app_event::WorkflowEvent::LoadCatalog {
+                            thread_id: thread_id.to_string(),
+                        },
+                    ));
+                }
                 self.apply_backend_banner_fallback(app_server).await;
                 if !recovery_was_pending {
                     self.chat_widget.finish_rate_limit_recovery();
