@@ -12,6 +12,7 @@ fn workflow_backend_isolates_upgrades_and_preserves_legacy_sockets() {
     std::fs::write(old.join("control.sock"), b"old daemon").unwrap();
     std::fs::write(old.join("host.sock"), b"old supervisor").unwrap();
     let legacy = home.join("ultracode-daemon/control.sock");
+    std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
     std::fs::write(&legacy, b"legacy daemon").unwrap();
     assert_eq!(workflow_backend_state_dir(home, &binary).unwrap(), old);
 
@@ -36,6 +37,45 @@ fn workflow_backend_isolates_upgrades_and_preserves_legacy_sockets() {
         new,
         workflow_backend_state_dir(home, &other_install).unwrap()
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn long_account_home_uses_private_short_bindable_sockets() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::net::UnixListener;
+
+    let directory = tempfile::tempdir().unwrap();
+    let home = directory.path().join("account-switcher".repeat(12));
+    std::fs::create_dir_all(&home).unwrap();
+    let binary = home.join("codex");
+    std::fs::write(&binary, b"test executable").unwrap();
+    let state = workflow_backend_state_dir(&home, &binary).unwrap();
+    assert_eq!(workflow_backend_state_dir(&home, &binary).unwrap(), state);
+    assert!(
+        state
+            .join("control.sock")
+            .as_os_str()
+            .as_encoded_bytes()
+            .len()
+            <= 100
+    );
+    assert_eq!(
+        std::fs::metadata(&state).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    let control = UnixListener::bind(state.join("control.sock")).unwrap();
+    let host = UnixListener::bind(state.join("host.sock")).unwrap();
+    let other_home = directory.path().join("other-account".repeat(12));
+    std::fs::create_dir_all(&other_home).unwrap();
+    let other = workflow_backend_state_dir(&other_home, &binary).unwrap();
+    assert_ne!(state, other);
+    drop((control, host));
+    std::fs::remove_dir_all(&state).unwrap();
+    std::os::unix::fs::symlink(&home, &state).unwrap();
+    assert!(workflow_backend_state_dir(&home, &binary).is_err());
+    std::fs::remove_file(&state).unwrap();
+    std::fs::remove_dir(&other).unwrap();
 }
 
 #[tokio::test]
