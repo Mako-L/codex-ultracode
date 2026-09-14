@@ -230,6 +230,7 @@ pub(crate) mod workflow_consent;
 mod workflow_runtime;
 pub(crate) mod workflow_view;
 mod workflow_view_style;
+mod workflow_worker_interrupt;
 pub use update_action::UpdateAction;
 #[cfg(not(debug_assertions))]
 pub use update_action::get_update_action;

@@ -247,6 +247,14 @@ impl Runtime {
     }
 
     async fn host_request(&self, method: &str, params: Value) -> Result<Value, BridgeError> {
+        if method == "worker.interrupt" {
+            return crate::workflow_worker_interrupt::interrupt(
+                self.handle.clone(),
+                serde_json::from_value(params)
+                    .map_err(|error| BridgeError::host(error.to_string()))?,
+            )
+            .await;
+        }
         let id = request_id();
         let request = match method {
             "workspace.prepare" => ClientRequest::WorkflowWorkspacePrepare {
@@ -255,11 +263,6 @@ impl Runtime {
                     .map_err(|e| BridgeError::host(format!("{e}")))?,
             },
             "workspace.release" => ClientRequest::WorkflowWorkspaceRelease {
-                request_id: id,
-                params: serde_json::from_value(params)
-                    .map_err(|e| BridgeError::host(format!("{e}")))?,
-            },
-            "worker.interrupt" => ClientRequest::TurnInterrupt {
                 request_id: id,
                 params: serde_json::from_value(params)
                     .map_err(|e| BridgeError::host(format!("{e}")))?,
