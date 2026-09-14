@@ -1943,18 +1943,11 @@ impl BottomPane {
                 );
             }
             let has_pending_thread_approvals = !self.pending_thread_approvals.is_empty();
-            if let Some(status) = &self.workflow_status {
-                flex.push(
-                    /*flex*/ 0,
-                    RenderableItem::Owned(Box::new(status.clone())),
-                );
-            }
             let has_pending_input = !self.pending_input_preview.queued_messages.is_empty()
                 || !self.pending_input_preview.pending_steers.is_empty()
                 || !self.pending_input_preview.rejected_steers.is_empty();
             let has_status_or_footer = self.status_widget().is_some()
                 || self.hook_status_message.is_some()
-                || self.workflow_status.is_some()
                 || !self.unified_exec_footer.is_empty();
             let has_inline_previews = has_pending_thread_approvals || has_pending_input;
             if has_inline_previews && has_status_or_footer {
@@ -1985,6 +1978,12 @@ impl BottomPane {
                 }))
             };
             flex2.push(/*flex*/ 0, composer);
+            if let Some(status) = &self.workflow_status {
+                flex2.push(
+                    /*flex*/ 0,
+                    RenderableItem::Owned(Box::new(status.clone())),
+                );
+            }
             RenderableItem::Owned(Box::new(flex2))
         }
     }
@@ -2120,9 +2119,11 @@ mod tests {
     }
 
     #[test]
-    fn workflow_status_footer_renders_above_composer() {
+    fn workflow_status_footer_renders_below_model_footer() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let mut pane = test_pane(AppEventSender::new(tx_raw));
+        pane.set_status_line_enabled(true);
+        pane.set_status_line(Some(Line::from("gpt-6-astra xhigh · project")));
         pane.set_workflow_status(Some(Line::from(
             "  1 workflow · 26 agents · ⚠ Large workflow · /workflows to stop",
         )));
@@ -2130,6 +2131,8 @@ mod tests {
             "workflow_status_footer",
             render_snapshot(&pane, Rect::new(0, 0, 96, 8))
         );
+        let rendered = render_snapshot(&pane, Rect::new(0, 0, 96, 8));
+        assert!(rendered.find("gpt-6-astra").unwrap() < rendered.find("1 workflow").unwrap());
         pane.set_workflow_status(None);
         assert!(!render_snapshot(&pane, Rect::new(0, 0, 96, 8)).contains("workflow"));
     }
