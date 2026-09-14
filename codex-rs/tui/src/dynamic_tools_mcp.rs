@@ -74,8 +74,10 @@ impl ThreadToolTransport {
             Self::Dynamic => {
                 params.dynamic_tools = Some(dynamic_tools::non_delegation_tool_specs());
             }
-            Self::Mcp(_) => {
-                params.dynamic_tools = None;
+            Self::Mcp(server) => {
+                params.dynamic_tools = server
+                    .native_workflow_tool
+                    .then(dynamic_tools::workflow_tool_specs);
                 self.configure_mcp(&mut params.config);
             }
         }
@@ -93,6 +95,10 @@ impl ThreadToolTransport {
 
 type ToolConnection = Arc<RwLock<Option<(AppServerRequestHandle, AppEventSender)>>>;
 
+#[cfg(test)]
+#[path = "dynamic_tools_native_workflow_transport_tests.rs"]
+mod native_workflow_transport_tests;
+
 pub(crate) trait WorkflowMcpHandler: Send + Sync {
     fn call(
         &self,
@@ -101,6 +107,8 @@ pub(crate) trait WorkflowMcpHandler: Send + Sync {
 }
 
 pub(crate) struct DynamicToolMcpServer {
+    // Local interactive daemons use native dynamic-tool requests for workflow consent.
+    native_workflow_tool: bool,
     connection: ToolConnection,
     config: Value,
     task: JoinHandle<()>,
@@ -142,6 +150,7 @@ impl DynamicToolMcpServer {
         }
         Ok(Self {
             connection: Arc::new(RwLock::new(Some((request_handle, events)))),
+            native_workflow_tool: true,
             config,
             task: tokio::spawn(async {}),
             supervisor: Some(supervisor),
@@ -229,6 +238,7 @@ impl DynamicToolMcpServer {
         });
         Ok(Self {
             connection,
+            native_workflow_tool: false,
             config: server_config,
             task,
             supervisor: None,
@@ -296,11 +306,18 @@ impl ServerHandler for DynamicToolMcpHandler {
                     .collect(),
             };
             for function in functions {
+                let description = if function.name == "workflow" {
+                    function
+                        .description
+                        .replace("tools.workflow", "tools.mcp__codex_tui__workflow")
+                } else {
+                    function.description
+                };
                 let schema = serde_json::from_value::<JsonObject>(function.input_schema)
                     .map_err(|error| McpError::internal_error(error.to_string(), None))?;
                 let mut tool = Tool::new(
                     Cow::Owned(function.name),
-                    Cow::Owned(function.description),
+                    Cow::Owned(description),
                     Arc::new(schema),
                 );
                 tool.annotations = Some(ToolAnnotations::new().read_only(matches!(
