@@ -7,8 +7,6 @@ on:
         description: Existing release tag to attach packages to
         default: v0.153.4-workflow.1
   push:
-    tags:
-      - "v*.*.*-workflow.*"
     branches:
       - feat/ultracode-native-parity
     paths:
@@ -40,12 +38,6 @@ jobs:
             node_path: node-v24.14.0-linux-x64/bin/node
             archive_ext: tar.gz
             binary_name: codex-x86_64-unknown-linux-gnu
-          - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-            node_url: https://nodejs.org/dist/v24.14.0/node-v24.14.0-linux-arm64.tar.gz
-            node_path: node-v24.14.0-linux-arm64/bin/node
-            archive_ext: tar.gz
-            binary_name: codex-aarch64-unknown-linux-gnu
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             node_url: https://nodejs.org/dist/v24.14.0/node-v24.14.0-win-x64.zip
@@ -115,10 +107,7 @@ jobs:
             strip --strip-unneeded dist/codex-package/bin/codex dist/codex-package/bin/codex-code-mode-host dist/codex-package/codex-resources/bwrap || true
           fi
           if [[ "${{ matrix.archive_ext }}" == "zip" ]]; then
-            python3 -c "from pathlib import Path; import zipfile; root=Path('dist/codex-package'); out=Path('dist/codex-package-${{ matrix.target }}.zip');
-zf=zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED);
-[zf.write(p, p.relative_to(root).as_posix()) for p in root.rglob('*') if p.is_file()];
-zf.close(); print(out)"
+            python3 -c "from pathlib import Path; import zipfile; root=Path('dist/codex-package'); out=Path('dist/codex-package-${{ matrix.target }}.zip'); zf=zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED); [zf.write(p, p.relative_to(root).as_posix()) for p in root.rglob('*') if p.is_file()]; zf.close(); print(out)"
             cp dist/codex-package/bin/codex.exe "dist/bin-only/${{ matrix.binary_name }}"
             python3 -c "from pathlib import Path; import zipfile; src=Path('dist/bin-only/${{ matrix.binary_name }}'); out=Path('dist/${{ matrix.binary_name }}.zip'); zf=zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED); zf.write(src, src.name); zf.close(); print(out)"
           else

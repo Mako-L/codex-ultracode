@@ -11,7 +11,6 @@ Download a package from [Releases](https://github.com/Mako-L/codex-ultracode/rel
 
 - macOS Apple Silicon: `codex-package-aarch64-apple-darwin.tar.gz`
 - Linux x86_64: `codex-package-x86_64-unknown-linux-gnu.tar.gz`
-- Linux arm64: `codex-package-aarch64-unknown-linux-gnu.tar.gz`
 - Windows x64: `codex-package-x86_64-pc-windows-msvc.zip`
 
 macOS / Linux:
