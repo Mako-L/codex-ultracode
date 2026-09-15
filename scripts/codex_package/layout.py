@@ -11,7 +11,7 @@ from .targets import TargetSpec
 from .zsh import ZSH_RESOURCE_PATH
 
 WORKFLOW_RUNTIME_RESOURCE_DIR = Path("workflow-runtime")
-WORKFLOW_RUNTIME_ENTRYPOINT = WORKFLOW_RUNTIME_RESOURCE_DIR / "bin" / "ultracode.mjs"
+WORKFLOW_RUNTIME_ENTRYPOINT = WORKFLOW_RUNTIME_RESOURCE_DIR / "bin" / "workflow.mjs"
 
 
 LAYOUT_VERSION = 1

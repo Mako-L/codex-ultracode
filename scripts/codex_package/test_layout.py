@@ -106,7 +106,7 @@ class PackageLayoutTest(unittest.TestCase):
                     / "codex-resources"
                     / "workflow-runtime"
                     / "bin"
-                    / "ultracode.mjs"
+                    / "workflow.mjs"
                 ).is_file()
             )
             self.assertFalse(
@@ -134,7 +134,7 @@ def make_workflow_runtime(root: Path) -> Path:
     (runtime / "bin").mkdir(parents=True)
     (runtime / "src").mkdir()
     (runtime / "node_modules").mkdir()
-    (runtime / "bin" / "ultracode.mjs").write_text("runtime", encoding="utf-8")
+    (runtime / "bin" / "workflow.mjs").write_text("runtime", encoding="utf-8")
     (runtime / "src" / "runtime.mjs").write_text("runtime", encoding="utf-8")
     (runtime / "package.json").write_text("{}\n", encoding="utf-8")
     (runtime / "package-lock.json").write_text("{}\n", encoding="utf-8")

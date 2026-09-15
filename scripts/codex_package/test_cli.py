@@ -138,7 +138,7 @@ class NodePackageTest(unittest.TestCase):
             source = root / "workflow-runtime"
             (source / "bin").mkdir(parents=True)
             (source / "src").mkdir()
-            (source / "bin" / "ultracode.mjs").write_text("runtime", encoding="utf-8")
+            (source / "bin" / "workflow.mjs").write_text("runtime", encoding="utf-8")
             (source / "package.json").write_text("{}\n", encoding="utf-8")
             (source / "package-lock.json").write_text("{}\n", encoding="utf-8")
             npm = root / "npm"

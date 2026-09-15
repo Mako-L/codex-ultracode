@@ -1,81 +1,52 @@
-<p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
+<p align="center"><strong>Codex Ultracode</strong> is a Codex CLI fork with a native workflow engine: two-pane phases and workers, <code>/workflows</code>, pause, resume, restart, and save.</p>
 <p align="center">
-  <img src="https://github.com/openai/codex/blob/main/.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />
+  <img src=".github/workflow-running.png" alt="A native workflow running in Codex Ultracode" width="90%" />
 </p>
-</br>
-If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="https://developers.openai.com/codex/ide">install in your IDE.</a>
-</br>If you want the desktop app experience, run <code>codex app</code> or visit <a href="https://chatgpt.com/codex?app-landing-page=true">the Codex App page</a>.
-</br>If you are looking for the <em>cloud-based agent</em> from OpenAI, <strong>Codex Web</strong>, go to <a href="https://chatgpt.com/codex">chatgpt.com/codex</a>.</p>
 
----
+This tree is based on Codex `0.153.4`. It is not official OpenAI Codex and is not kept on current `openai/codex` main. Use [GitHub Releases](https://github.com/Mako-L/codex-ultracode/releases) from this repo. Do not install `@openai/codex` or the ChatGPT installer if you want this fork.
 
-## Quickstart
+## Install
 
-### Installing and running Codex CLI
-
-Run the following on Mac or Linux to install Codex CLI:
+Apple Silicon only for this release (`aarch64-apple-darwin`).
 
 ```shell
-curl -fsSL https://chatgpt.com/codex/install.sh | sh
+gh release download --repo Mako-L/codex-ultracode --pattern 'codex-package-aarch64-apple-darwin.tar.gz'
+mkdir -p "$HOME/.local/codex-ultracode"
+tar -xzf codex-package-aarch64-apple-darwin.tar.gz -C "$HOME/.local/codex-ultracode"
+ln -sf "$HOME/.local/codex-ultracode/bin/codex" "$HOME/.local/bin/codex-ultracode"
 ```
 
-Run the following on Windows to install Codex CLI:
+## Run
 
 ```shell
-powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"
+codex-ultracode --native-workflow-host -m gpt-5.6-luna --effort low
 ```
 
-The standalone installers download from `https://releases.openai.com/codex` by default and fall back to GitHub Releases if a metadata or asset download is unavailable. To force GitHub Releases, set `CODEX_INSTALLER_USE_RELEASES_OPENAI_COM` to `false` (`0` and `no` are also accepted):
+Ask for a workflow, or type `/workflows`. From an empty composer, Down selects the workflow footer and Enter opens it. Resume with the same `codex-ultracode` launcher, not the official `codex` binary.
+
+Sign in with ChatGPT or an API key the same way as upstream Codex.
+
+## Build from source
 
 ```shell
-curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_INSTALLER_USE_RELEASES_OPENAI_COM=false sh
+git clone https://github.com/Mako-L/codex-ultracode.git
+cd codex-ultracode
+export CODEX_REPO_ROOT="$PWD"
+/opt/homebrew/bin/python3 scripts/build_codex_package.py \
+  --target aarch64-apple-darwin \
+  --variant codex \
+  --cargo-profile release \
+  --node-bin /path/to/self-contained/node \
+  --package-dir dist/codex-package \
+  --archive-output dist/codex-package-aarch64-apple-darwin.tar.gz \
+  --force
 ```
 
-```powershell
-$env:CODEX_INSTALLER_USE_RELEASES_OPENAI_COM='false'; irm https://chatgpt.com/codex/install.ps1 | iex
-```
-
-Codex CLI can also be installed via the following package managers:
-
-```shell
-# Install using npm
-npm install -g @openai/codex
-```
-
-```shell
-# Install using Homebrew
-brew install --cask codex
-```
-
-Then simply run `codex` to get started.
-
-<details>
-<summary>You can also go to the <a href="https://github.com/openai/codex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
-
-Each GitHub Release contains many executables, but in practice, you likely want one of these:
-
-- macOS
-  - Apple Silicon/arm64: `codex-aarch64-apple-darwin.tar.gz`
-  - x86_64 (older Mac hardware): `codex-x86_64-apple-darwin.tar.gz`
-- Linux
-  - x86_64: `codex-x86_64-unknown-linux-musl.tar.gz`
-  - arm64: `codex-aarch64-unknown-linux-musl.tar.gz`
-
-Each archive contains a single entry with the platform baked into the name (e.g., `codex-x86_64-unknown-linux-musl`), so you likely want to rename it to `codex` after extracting it.
-
-</details>
-
-### Using Codex with your ChatGPT plan
-
-Run `codex` and select **Sign in with ChatGPT**. We recommend signing into your ChatGPT account to use Codex as part of your Plus, Pro, Business, Edu, or Enterprise plan. [Learn more about what's included in your ChatGPT plan](https://help.openai.com/en/articles/11369540-codex-in-chatgpt).
-
-You can also use Codex with an API key, but this requires [additional setup](https://developers.openai.com/codex/auth#sign-in-with-an-api-key).
+See [Installing & building](./docs/install.md) for the Rust toolchain.
 
 ## Docs
 
-- [**Codex Documentation**](https://developers.openai.com/codex)
-- [**Contributing**](./docs/contributing.md)
-- [**Installing & building**](./docs/install.md)
-- [**Open source fund**](./docs/open-source-fund.md)
+- [Codex Documentation](https://developers.openai.com/codex)
+- [Installing & building](./docs/install.md)
 
 This repository is licensed under the [Apache-2.0 License](LICENSE).
