@@ -5,12 +5,14 @@ on:
     inputs:
       tag:
         description: Existing release tag to attach packages to
-        required: true
         default: v0.153.4-workflow.1
-        type: string
   push:
     tags:
       - "v*.*.*-workflow.*"
+    branches:
+      - feat/ultracode-native-parity
+    paths:
+      - ".github/workflows/workflow-release.yml"
 
 permissions:
   contents: write
@@ -92,7 +94,14 @@ jobs:
           LIBSQLITE3_FLAGS: ${{ runner.os == 'Windows' && 'SQLITE_DISABLE_INTRINSIC' || '' }}
         run: |
           set -euo pipefail
-          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          tag="${{ github.event.inputs.tag }}"
+          if [[ -z "$tag" ]]; then
+            if [[ "${{ github.ref_type }}" == "tag" ]]; then
+              tag="${{ github.ref_name }}"
+            else
+              tag="v0.153.4-workflow.1"
+            fi
+          fi
           mkdir -p dist/bin-only
           python3 scripts/build_codex_package.py \
             --target "${{ matrix.target }}" \
