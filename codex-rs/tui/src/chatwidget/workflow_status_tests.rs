@@ -35,7 +35,19 @@ fn main_view_names_running_workflow_and_updates_progress() {
         Some(ratatui::style::Color::Red)
     );
     snapshot["runs"][0]["status"] = json!("completed");
-    assert!(workflow_status_line(&snapshot, &settings).is_none());
+    snapshot["runs"][0]["description"] = json!("UI inspection");
+    snapshot["runs"][0]["startedAt"] = json!("2026-09-14T19:42:00Z");
+    snapshot["runs"][0]["endedAt"] = json!("2026-09-14T19:42:13Z");
+    snapshot["runs"][0]["workers"][1]["status"] = json!("completed");
+    snapshot["runs"][0]["workers"][2]["status"] = json!("completed");
+    snapshot["runs"][0]["workers"][0]["usage"] = json!({"totalTokens": 33000});
+    let completed = workflow_status_line(&snapshot, &settings).unwrap();
+    assert_eq!(completed.spans[0].content.as_ref(), " ◯");
+    let completed = completed.to_string();
+    assert!(completed.contains("repair-project"));
+    assert!(completed.contains("UI inspection"));
+    assert!(completed.contains("3/3 agents done"));
+    assert!(completed.contains("13s"));
 }
 
 #[test]
@@ -47,7 +59,10 @@ fn workflow_footer_warns_from_real_progress_and_clears_terminal_runs() {
     assert!(line.contains("1 workflow · 26 agents"));
     assert!(line.contains("Large workflow · /workflows to stop"));
     snapshot["runs"][0]["status"] = json!("completed");
-    assert!(workflow_status_line(&snapshot, &WorkflowWarningSettings::default()).is_none());
+    let completed = workflow_status_line(&snapshot, &WorkflowWarningSettings::default())
+        .unwrap()
+        .to_string();
+    assert!(completed.contains("26/26 agents done"));
 }
 
 #[test]
