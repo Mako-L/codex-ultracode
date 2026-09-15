@@ -22,12 +22,15 @@ concurrency:
 env:
   NODE_VERSION: "24.14.0"
   PACKAGE_VERSION: "0.153.4-workflow.1"
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+  CARGO_PROFILE_RELEASE_STRIP: "symbols"
 
 jobs:
   package:
     name: ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
@@ -84,6 +87,7 @@ jobs:
         shell: bash
         env:
           LIBSQLITE3_FLAGS: ${{ runner.os == 'Windows' && 'SQLITE_DISABLE_INTRINSIC' || '' }}
+          RUSTFLAGS: ${{ runner.os == 'Linux' && '-C link-arg=-fuse-ld=bfd' || '' }}
         run: |
           set -euo pipefail
           tag="${{ github.event.inputs.tag }}"
