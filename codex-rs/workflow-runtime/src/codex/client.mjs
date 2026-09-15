@@ -425,8 +425,8 @@ export class CodexClient extends EventEmitter {
     else if (message.method === 'item/permissions/requestApproval') result = {permissions:{},scope:'turn'};
     else if (message.method === 'mcpServer/elicitation/request') result = { action: 'cancel' };
     else if (message.method === 'item/tool/requestUserInput') result = { answers: {} };
-    else if (message.method === 'item/tool/call') result = { contentItems: [{ type: 'inputText', text: 'Denied by Ultracode' }], success: false };
-    else return this.#send({ id: message.id, error: { code: -32000, message: 'Request denied by Ultracode' } });
+    else if (message.method === 'item/tool/call') result = { contentItems: [{ type: 'inputText', text: 'Denied by native workflows' }], success: false };
+    else return this.#send({ id: message.id, error: { code: -32000, message: 'Request denied by native workflows' } });
     this.#send({ id: message.id, result });
   }
 

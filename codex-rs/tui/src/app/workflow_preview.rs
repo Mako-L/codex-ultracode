@@ -6,7 +6,7 @@ use crate::app_event::WorkflowConsentFeedbackState;
 use crate::app_event::WorkflowEvent;
 use crate::app_event::WorkflowPreviewMode;
 use crate::render::renderable::ColumnRenderable;
-use crate::ultracode_source::WorkflowSourcePreview;
+use crate::workflow_source::WorkflowSourcePreview;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
@@ -27,7 +27,7 @@ impl App {
         let bridge = self
             .ensure_workflow_session(&authority, thread_id, app_server)
             .await?;
-        let mut preview = crate::ultracode_source::read_preview(
+        let mut preview = crate::workflow_source::read_preview(
             &app_server.request_handle(),
             thread_id,
             &authority,

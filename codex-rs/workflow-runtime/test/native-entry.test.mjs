@@ -15,7 +15,7 @@ test('Codex-owned bridge runs without plugins, plugin roots, or commands on PATH
   const env = {...process.env,CODEX_HOME:home,PATH:path.join(directory,'no-programs')};
   delete env.ULTRACODE_PLUGIN_ROOT;
   delete env.CODEX_PLUGIN_ROOT;
-  const child = spawn(process.execPath,[path.resolve(import.meta.dirname,'../bin/ultracode.mjs'),
+  const child = spawn(process.execPath,[path.resolve(import.meta.dirname,'../bin/workflow.mjs'),
     'bridge','--stdio','--cwd',cwd,'--state-dir',path.join(home,'workflows')],{cwd,env,stdio:'pipe'});
   const closed = new Promise(resolve => child.once('close',(code,signal) => resolve({code,signal})));
   let stderr = '';

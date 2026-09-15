@@ -2,7 +2,7 @@ use super::*;
 use crate::app_event::WorkflowConsentContext;
 use crate::app_event::WorkflowConsentFeedbackState;
 use crate::app_event::WorkflowPreviewMode;
-use crate::ultracode_source::WorkflowSourcePreview;
+use crate::workflow_source::WorkflowSourcePreview;
 
 impl App {
     pub(super) async fn edit_workflow_source(

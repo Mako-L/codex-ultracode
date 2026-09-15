@@ -8,10 +8,10 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::dynamic_tools_mcp::DynamicToolMcpServer;
 use crate::dynamic_tools_mcp::WorkflowMcpHandler;
-use crate::ultracode_bridge::BridgeError;
-use crate::ultracode_bridge::BridgeEvent;
-use crate::ultracode_bridge::BridgeLaunch;
-use crate::ultracode_bridge::UltracodeBridge;
+use crate::workflow_bridge::BridgeError;
+use crate::workflow_bridge::BridgeEvent;
+use crate::workflow_bridge::BridgeLaunch;
+use crate::workflow_bridge::WorkflowBridge;
 use codex_app_server_client::AppServerClient;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_client::AppServerRequestHandle;
@@ -34,16 +34,16 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
-#[path = "ultracode_host_binding.rs"]
+#[path = "workflow_host_binding.rs"]
 mod binding;
-#[path = "ultracode_host_headless.rs"]
+#[path = "workflow_host_headless.rs"]
 mod headless;
-#[path = "ultracode_host_socket.rs"]
+#[path = "workflow_host_socket.rs"]
 mod socket;
 #[cfg(test)]
-#[path = "ultracode_host_socket_tests.rs"]
+#[path = "workflow_host_socket_tests.rs"]
 mod socket_tests;
-#[path = "ultracode_host_workers.rs"]
+#[path = "workflow_host_workers.rs"]
 mod workers;
 use binding::HeadlessBinding;
 
@@ -58,7 +58,7 @@ pub(super) enum Resolution {
 }
 
 pub(super) struct Parent {
-    bridge: UltracodeBridge,
+    bridge: WorkflowBridge,
     attachment: Mutex<Option<(Uuid, Reply)>>,
     directory: PathBuf,
     plugin_root: PathBuf,
@@ -181,7 +181,7 @@ impl Runtime {
         let directory = self.home.join("ultracode/sessions").join(parent_id);
         std::fs::create_dir_all(&directory)
             .map_err(|error| BridgeError::host(error.to_string()))?;
-        let bridge = UltracodeBridge::spawn(BridgeLaunch {
+        let bridge = WorkflowBridge::spawn(BridgeLaunch {
             node: runtime.node,
             script: runtime.script,
             plugin_root: root.clone(),
@@ -312,7 +312,7 @@ impl Runtime {
             .cloned()
             .unwrap_or(Value::Null);
         let summary = format!(
-            "Ultracode workflow {run_id} attempt {attempt} finished with status {status}. scriptPath={} transcriptDir={} Consolidated result: {body}",
+            "workflow {run_id} attempt {attempt} finished with status {status}. scriptPath={} transcriptDir={} Consolidated result: {body}",
             state["scriptPath"], state["transcriptDir"]
         );
         let completion = self
@@ -449,7 +449,7 @@ impl WorkflowMcpHandler for WorkflowFrontend {
                         })
                         .await
                         .map_err(|error| BridgeError::host(error.to_string()))?;
-                    let result = crate::ultracode_launch::launch(
+                    let result = crate::workflow_launch::launch(
                         &runtime.handle,
                         &params.thread_id,
                         &authority,
@@ -469,7 +469,7 @@ impl WorkflowMcpHandler for WorkflowFrontend {
                     Ok(result)
                 }
                 .await;
-                return crate::ultracode_launch::response(result);
+                return crate::workflow_launch::response(result);
             }
 
             // Contention while another parent starts is not evidence that this frontend detached.

@@ -1,8 +1,8 @@
 use super::*;
 use crate::app_event::WorkflowEvent;
 use crate::app_event::WorkflowPreviewMode;
-use crate::ultracode_source::WorkflowMetadata;
-use crate::ultracode_source::WorkflowPhase;
+use crate::workflow_source::WorkflowMetadata;
+use crate::workflow_source::WorkflowPhase;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::HashMap;
@@ -38,7 +38,7 @@ async fn preview_app_server(config: &Config, root: &Path) -> Result<AppServerSes
     .await
 }
 
-async fn preview_bridge(root: &Path) -> Result<crate::ultracode_bridge::UltracodeBridge> {
+async fn preview_bridge(root: &Path) -> Result<crate::workflow_bridge::WorkflowBridge> {
     let script = root.join("bridge.mjs");
     std::fs::write(root.join("saved.js"), SAVED_SOURCE)?;
     std::fs::write(root.join("resumed.js"), RESUMED_SOURCE)?;
@@ -77,7 +77,7 @@ for await (const line of readline.createInterface({input:process.stdin})) {
   }catch(error){process.stdout.write(JSON.stringify({id:request.id,ok:false,error:{code:'CONFLICT',message:error.message}})+'\n');}
 }"#,
     )?;
-    crate::ultracode_bridge::UltracodeBridge::spawn(crate::ultracode_bridge::BridgeLaunch {
+    crate::workflow_bridge::WorkflowBridge::spawn(crate::workflow_bridge::BridgeLaunch {
         node: "node".into(),
         script,
         plugin_root: root.into(),
@@ -532,7 +532,7 @@ async fn workflow_consent_toggles_summary_and_raw_without_settling_request() -> 
     let (mut app, mut events, _ops) = make_test_app_with_channels().await;
     while events.try_recv().is_ok() {}
     let arguments = json!({"script": "export const meta = {name: 'proof', description: 'Proof'};\nreturn 'raw';"});
-    let mut preview = crate::ultracode_source::WorkflowSourcePreview::inline("thread", &arguments)
+    let mut preview = crate::workflow_source::WorkflowSourcePreview::inline("thread", &arguments)
         .expect("inline preview");
     preview.metadata = Some(WorkflowMetadata {
         name: "proof".into(),
@@ -612,7 +612,7 @@ async fn saved_workflow_consent_toggle_retains_name_args_and_remember_identity()
     let (mut app, mut events, _ops) = make_test_app_with_channels().await;
     while events.try_recv().is_ok() {}
     let arguments = json!({"script": "return 'saved';"});
-    let mut preview = crate::ultracode_source::WorkflowSourcePreview::inline("thread", &arguments)
+    let mut preview = crate::workflow_source::WorkflowSourcePreview::inline("thread", &arguments)
         .expect("inline preview");
     preview.workflow_id = Some("saved-digest".into());
     preview.metadata = Some(WorkflowMetadata {
@@ -673,7 +673,7 @@ async fn invalid_workflow_consent_keeps_raw_source_and_editor_available() -> Res
     let (mut app, mut events, _ops) = make_test_app_with_channels().await;
     while events.try_recv().is_ok() {}
     let arguments = json!({"script": "export const meta = ;"});
-    let mut preview = crate::ultracode_source::WorkflowSourcePreview::inline("thread", &arguments)
+    let mut preview = crate::workflow_source::WorkflowSourcePreview::inline("thread", &arguments)
         .expect("inline preview");
     preview.validation_error = Some("Unexpected token ';'".into());
     let digest = preview.digest.clone();
@@ -771,7 +771,7 @@ async fn edited_saved_and_resumed_previews_launch_exact_bound_source() -> Result
                 allow_isolated_workspaces: true,
             })
             .await?;
-        let launch = crate::ultracode_launch::launch_with_preview(
+        let launch = crate::workflow_launch::launch_with_preview(
             &app_server.request_handle(),
             &thread_id.to_string(),
             &authority,
@@ -838,7 +838,7 @@ async fn unchanged_edited_saved_source_retries_validation_without_launching() ->
     let source = "export const meta = {name: 'edited-saved', description: 'Edited saved'};\nreturn 'edited saved';";
     let arguments = json!({"script": source, "args": "original args"});
     let mut preview =
-        crate::ultracode_source::WorkflowSourcePreview::inline(&thread_id.to_string(), &arguments)
+        crate::workflow_source::WorkflowSourcePreview::inline(&thread_id.to_string(), &arguments)
             .expect("previously edited saved preview");
     preview.validation_error = Some("temporary validation failure".into());
     let digest = preview.digest.clone();
@@ -914,7 +914,7 @@ async fn workflow_consent_collects_inline_accept_and_reject_feedback() -> Result
     let (mut app, mut events, _ops) = make_test_app_with_channels().await;
     while events.try_recv().is_ok() {}
     let arguments = json!({"script": "return 'feedback';"});
-    let mut preview = crate::ultracode_source::WorkflowSourcePreview::inline("thread", &arguments)
+    let mut preview = crate::workflow_source::WorkflowSourcePreview::inline("thread", &arguments)
         .expect("inline preview");
     preview.metadata = Some(WorkflowMetadata {
         name: "feedback".into(),
@@ -1018,7 +1018,7 @@ async fn workflow_consent_carries_feedback_into_editor_replacement() -> Result<(
     let (mut app, mut events, _ops) = make_test_app_with_channels().await;
     while events.try_recv().is_ok() {}
     let arguments = json!({"script": "return 'edit feedback';"});
-    let preview = crate::ultracode_source::WorkflowSourcePreview::inline("thread", &arguments)
+    let preview = crate::workflow_source::WorkflowSourcePreview::inline("thread", &arguments)
         .expect("inline preview");
     let params = codex_app_server_protocol::DynamicToolCallParams {
         thread_id: "thread".into(),
@@ -1048,10 +1048,10 @@ async fn workflow_consent_carries_feedback_into_editor_replacement() -> Result<(
     Ok(())
 }
 
-fn attach_consent_presentation(preview: &mut crate::ultracode_source::WorkflowSourcePreview) {
-    use crate::ultracode_source::WorkflowConsentPhase;
-    use crate::ultracode_source::WorkflowConsentPresentation;
-    use crate::ultracode_source::WorkflowConsentSource;
+fn attach_consent_presentation(preview: &mut crate::workflow_source::WorkflowSourcePreview) {
+    use crate::workflow_source::WorkflowConsentPhase;
+    use crate::workflow_source::WorkflowConsentPresentation;
+    use crate::workflow_source::WorkflowConsentSource;
     let phases = preview.metadata.as_ref().map(|meta| {
         meta.phases
             .iter()
@@ -1089,7 +1089,7 @@ async fn workflow_consent_presentation_controls_toggle_and_remember_eligibility(
         (true, true, false, false, false),
     ] {
         let (mut app, _events, _ops) = make_test_app_with_channels().await;
-        let mut preview = crate::ultracode_source::WorkflowSourcePreview::inline(
+        let mut preview = crate::workflow_source::WorkflowSourcePreview::inline(
             "thread",
             &json!({"script": "return 1;"}),
         )

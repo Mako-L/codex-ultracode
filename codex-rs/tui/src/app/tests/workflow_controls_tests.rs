@@ -22,7 +22,7 @@ for await (const line of readline.createInterface({input:process.stdin})) {
 }"#,
     )?;
     let bridge =
-        crate::ultracode_bridge::UltracodeBridge::spawn(crate::ultracode_bridge::BridgeLaunch {
+        crate::workflow_bridge::WorkflowBridge::spawn(crate::workflow_bridge::BridgeLaunch {
             node: "node".into(),
             script,
             plugin_root: temp.path().to_path_buf(),
@@ -106,7 +106,7 @@ for await (const line of readline.createInterface({input:process.stdin})) {
 }"#,
     )?;
     let bridge =
-        crate::ultracode_bridge::UltracodeBridge::spawn(crate::ultracode_bridge::BridgeLaunch {
+        crate::workflow_bridge::WorkflowBridge::spawn(crate::workflow_bridge::BridgeLaunch {
             node: "node".into(),
             script,
             plugin_root: temp.path().to_path_buf(),

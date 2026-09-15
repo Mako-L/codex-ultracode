@@ -58,7 +58,7 @@ impl std::fmt::Display for BridgeError {
 impl std::error::Error for BridgeError {}
 
 #[cfg(test)]
-#[path = "ultracode_worker_configuration_tests.rs"]
+#[path = "workflow_worker_configuration_tests.rs"]
 mod worker_configuration_tests;
 impl BridgeError {
     pub(crate) fn worker_start(error: codex_app_server_client::TypedRequestError) -> Self {
@@ -107,17 +107,17 @@ struct Inner {
     stderr: Arc<Mutex<String>>,
 }
 #[derive(Clone)]
-pub(crate) struct UltracodeBridge {
+pub(crate) struct WorkflowBridge {
     inner: Arc<Inner>,
 }
 
-impl std::fmt::Debug for UltracodeBridge {
+impl std::fmt::Debug for WorkflowBridge {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("UltracodeBridge").finish_non_exhaustive()
+        f.debug_struct("WorkflowBridge").finish_non_exhaustive()
     }
 }
 
-impl UltracodeBridge {
+impl WorkflowBridge {
     pub(crate) fn same_peer(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
@@ -143,7 +143,7 @@ impl UltracodeBridge {
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| {
-                BridgeError::internal(format!("failed to spawn Ultracode bridge: {e}"), false)
+                BridgeError::internal(format!("failed to spawn workflow bridge: {e}"), false)
             })?;
         let stdin = child
             .stdin
@@ -473,7 +473,7 @@ impl UltracodeBridge {
     }
 }
 /// Detach a frontend's parents as one recoverable handoff.
-pub(crate) async fn detach_all(parents: &[(String, UltracodeBridge)]) -> Result<(), BridgeError> {
+pub(crate) async fn detach_all(parents: &[(String, WorkflowBridge)]) -> Result<(), BridgeError> {
     if parents.iter().any(|(_, bridge)| !bridge.is_supervised()) {
         return Err(BridgeError::host(
             "Background workflows require the native workflow host; this frontend still owns execution.",
@@ -538,7 +538,7 @@ fn read_stderr<R: Read>(mut source: R, target: Arc<Mutex<String>>) {
 }
 
 #[cfg(all(test, unix))]
-#[path = "ultracode_socket_disconnect_tests.rs"]
+#[path = "workflow_socket_disconnect_tests.rs"]
 mod socket_disconnect_tests;
 
 #[cfg(test)]
@@ -562,7 +562,7 @@ mod tests {
             web_search_available: true,
         };
         let expected_cwd = launch.cwd.clone();
-        let bridge = UltracodeBridge::spawn(launch).await.unwrap();
+        let bridge = WorkflowBridge::spawn(launch).await.unwrap();
         let mut events = bridge.take_events().unwrap();
         assert_eq!(
             bridge.list_runs().await.unwrap(),
@@ -582,7 +582,7 @@ mod tests {
         let temp = tempdir().unwrap();
         let script = temp.path().join("exit.mjs");
         fs::write(&script, "import readline from 'node:readline';readline.createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);if(m.method==='hello')process.stdout.write(JSON.stringify({id:m.id,ok:true,result:{protocolVersion:1}})+'\\n');else process.exit(2)});").unwrap();
-        let bridge = UltracodeBridge::spawn(BridgeLaunch {
+        let bridge = WorkflowBridge::spawn(BridgeLaunch {
             node: "node".into(),
             script,
             plugin_root: temp.path().into(),
@@ -602,7 +602,7 @@ mod tests {
         let temp = tempdir().unwrap();
         let script = temp.path().join("fail.mjs");
         fs::write(&script, "process.exit(2)").unwrap();
-        let result = UltracodeBridge::spawn(BridgeLaunch {
+        let result = WorkflowBridge::spawn(BridgeLaunch {
             node: "node".into(),
             script,
             plugin_root: temp.path().into(),

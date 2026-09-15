@@ -1,5 +1,5 @@
 use super::*;
-use crate::ultracode_source::WorkflowConsentPresentation;
+use crate::workflow_source::WorkflowConsentPresentation;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use serde_json::json;

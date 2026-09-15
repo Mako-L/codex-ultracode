@@ -204,7 +204,7 @@ impl App {
         &mut self,
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
-        bridge: &crate::ultracode_bridge::UltracodeBridge,
+        bridge: &crate::workflow_bridge::WorkflowBridge,
         action: crate::workflow_view::WorkflowAction,
     ) -> Result<(), String> {
         use crate::workflow_view::WorkflowAction;

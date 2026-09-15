@@ -202,17 +202,17 @@ mod terminal_probe;
 mod terminal_title;
 mod terminal_visualization_instructions;
 #[cfg(unix)]
-mod ultracode_host;
-mod ultracode_launch;
-mod ultracode_source;
+mod workflow_host;
+mod workflow_launch;
+mod workflow_source;
 #[cfg(unix)]
-pub use ultracode_host::run as run_workflow_supervisor;
+pub use workflow_host::run as run_workflow_supervisor;
 #[cfg(unix)]
-mod ultracode_headless;
+mod workflow_headless;
 #[cfg(unix)]
-pub use ultracode_headless::HeadlessWorkflowController;
+pub use workflow_headless::HeadlessWorkflowController;
 #[cfg(unix)]
-pub use ultracode_headless::prepare as prepare_headless_workflow_host;
+pub use workflow_headless::prepare as prepare_headless_workflow_host;
 mod text_formatting;
 mod theme_picker;
 mod thread_transcript;
@@ -221,12 +221,12 @@ mod tooltips;
 mod transcript_reflow;
 mod tui;
 mod ui_consts;
-pub(crate) mod ultracode_bridge;
-mod ultracode_keyword;
 mod unarchive_prompt;
 pub(crate) mod update_action;
 mod workflow_advisory;
+pub(crate) mod workflow_bridge;
 pub(crate) mod workflow_consent;
+mod workflow_keyword;
 mod workflow_runtime;
 pub(crate) mod workflow_view;
 mod workflow_view_style;

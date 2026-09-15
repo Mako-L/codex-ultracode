@@ -311,7 +311,7 @@ pub(crate) struct AppServerSession {
     dynamic_tool_mcp: Option<Arc<DynamicToolMcpServer>>,
     workflows_disabled: bool,
     workflow_response_bridges:
-        std::sync::Mutex<HashMap<String, crate::ultracode_bridge::UltracodeBridge>>,
+        std::sync::Mutex<HashMap<String, crate::workflow_bridge::WorkflowBridge>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1658,7 +1658,7 @@ impl AppServerSession {
     pub(crate) fn register_workflow_response(
         &self,
         id: String,
-        bridge: crate::ultracode_bridge::UltracodeBridge,
+        bridge: crate::workflow_bridge::WorkflowBridge,
     ) {
         self.workflow_response_bridges
             .lock()

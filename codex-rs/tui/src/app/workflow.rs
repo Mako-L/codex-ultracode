@@ -3,7 +3,7 @@ use crate::app_event::WorkflowConsentChoice;
 use crate::app_event::WorkflowEvent;
 
 pub(crate) struct WorkflowSession {
-    pub(crate) bridge: crate::ultracode_bridge::UltracodeBridge,
+    pub(crate) bridge: crate::workflow_bridge::WorkflowBridge,
     pub(crate) pending_workers: HashMap<String, PendingWorker>,
     pub(crate) consent: crate::workflow_consent::WorkflowConsentStore,
     pub(crate) reported_runs: HashSet<(String, u64)>,
@@ -41,13 +41,13 @@ fn terminal_output(
     status: &str,
     structured: bool,
     text: &str,
-) -> Result<serde_json::Value, crate::ultracode_bridge::BridgeError> {
+) -> Result<serde_json::Value, crate::workflow_bridge::BridgeError> {
     if status != "completed" {
         return Ok(serde_json::Value::Null);
     }
     if structured {
         return serde_json::from_str(text).map_err(|error| {
-            crate::ultracode_bridge::BridgeError::host_code(
+            crate::workflow_bridge::BridgeError::host_code(
                 "INVALID_STRUCTURED_OUTPUT",
                 error.to_string(),
             )
@@ -72,7 +72,7 @@ impl App {
         authority: &codex_app_server_protocol::WorkflowAuthorityCaptureResponse,
         session_key: &str,
         app_server: &AppServerSession,
-    ) -> Result<crate::ultracode_bridge::UltracodeBridge> {
+    ) -> Result<crate::workflow_bridge::WorkflowBridge> {
         if let Some(session) = self.workflow_sessions.get(session_key) {
             return Ok(session.bridge.clone());
         }
@@ -85,7 +85,7 @@ impl App {
         let bridge = if supervised {
             #[cfg(unix)]
             {
-                crate::ultracode_host::attach(&self.config.codex_home, session_key, &plugin_root)
+                crate::workflow_host::attach(&self.config.codex_home, session_key, &plugin_root)
                     .await?
             }
             #[cfg(not(unix))]
@@ -93,7 +93,7 @@ impl App {
                 unreachable!()
             }
         } else {
-            crate::ultracode_bridge::UltracodeBridge::spawn(crate::ultracode_bridge::BridgeLaunch {
+            crate::workflow_bridge::WorkflowBridge::spawn(crate::workflow_bridge::BridgeLaunch {
                 node: runtime.node,
                 script: runtime.script,
                 plugin_root,
@@ -116,13 +116,13 @@ impl App {
             tokio::spawn(async move {
                 while let Some(event) = events.recv().await {
                     match event {
-                        crate::ultracode_bridge::BridgeEvent::RunChanged { run_id, .. } => {
+                        crate::workflow_bridge::BridgeEvent::RunChanged { run_id, .. } => {
                             tx.send(AppEvent::Workflow(WorkflowEvent::RunChanged {
                                 bridge: event_bridge.clone(),
                                 run_id,
                             }))
                         }
-                        crate::ultracode_bridge::BridgeEvent::Request { id, method, params } => tx
+                        crate::workflow_bridge::BridgeEvent::Request { id, method, params } => tx
                             .send(AppEvent::Workflow(WorkflowEvent::HostRequest {
                                 bridge: event_bridge.clone(),
                                 id,
@@ -421,7 +421,7 @@ impl App {
                         ));
                     }
                 }
-                let launch = crate::ultracode_launch::launch_with_preview(
+                let launch = crate::workflow_launch::launch_with_preview(
                     &app_server.request_handle(),
                     &key,
                     &authority,
@@ -469,7 +469,7 @@ impl App {
                     });
                     return Ok(());
                 }
-                if let Err(error) = crate::ultracode_launch::validate_arguments(&params.arguments) {
+                if let Err(error) = crate::workflow_launch::validate_arguments(&params.arguments) {
                     self.app_event_tx.send(AppEvent::DynamicToolCallCompleted {
                         request_id,
                         response: crate::dynamic_tools::failure_response(error.to_string()),
@@ -485,8 +485,8 @@ impl App {
                         )?
                         .allows_auto_first_launch());
                 let mut named_allowed = false;
-                if let Ok(crate::ultracode_source::SourceLocation::Saved(name)) =
-                    crate::ultracode_source::source_location(&params.arguments)
+                if let Ok(crate::workflow_source::SourceLocation::Saved(name)) =
+                    crate::workflow_source::source_location(&params.arguments)
                 {
                     let authority = app_server
                         .workflow_authority_capture(
@@ -614,7 +614,7 @@ impl App {
                         .unwrap()
                         .bridge
                         .clone();
-                    let launch = crate::ultracode_launch::launch_with_preview(
+                    let launch = crate::workflow_launch::launch_with_preview(
                         &app_server.request_handle(),
                         &session_key,
                         &authority,
@@ -648,7 +648,7 @@ impl App {
                             .consent
                             .remember_named(Path::new(&authority.cwd), name, digest)?;
                     }
-                    Ok(crate::ultracode_launch::response(launch.result))
+                    Ok(crate::workflow_launch::response(launch.result))
                 }
                 .await;
                 let mut response = response.unwrap_or_else(|error| {
@@ -730,14 +730,14 @@ impl App {
                         tokio::spawn(async move {
                             while let Some(event) = events.recv().await {
                                 match event {
-                                    crate::ultracode_bridge::BridgeEvent::RunChanged {
+                                    crate::workflow_bridge::BridgeEvent::RunChanged {
                                         run_id,
                                         ..
                                     } => tx.send(AppEvent::Workflow(WorkflowEvent::RunChanged {
                                         bridge: event_bridge.clone(),
                                         run_id,
                                     })),
-                                    crate::ultracode_bridge::BridgeEvent::Request {
+                                    crate::workflow_bridge::BridgeEvent::Request {
                                         id,
                                         method,
                                         params,
@@ -840,7 +840,7 @@ impl App {
                                 status.to_string(),
                                 detail,
                                 format!(
-                                    "Ultracode workflow {run_id} attempt {attempt} finished with status {status}.{paths} Consolidated result: {body}"
+                                    "workflow {run_id} attempt {attempt} finished with status {status}.{paths} Consolidated result: {body}"
                                 ),
                             ));
                         }
@@ -972,7 +972,7 @@ impl App {
                     else {
                         bridge.respond(
                             &id,
-                            Err(crate::ultracode_bridge::BridgeError::host(
+                            Err(crate::workflow_bridge::BridgeError::host(
                                 "parent workflow session is unavailable",
                             )),
                         )?;
@@ -987,7 +987,7 @@ impl App {
                             Err(error) => {
                                 bridge.respond(
                                     &id,
-                                    Err(crate::ultracode_bridge::BridgeError::host(format!(
+                                    Err(crate::workflow_bridge::BridgeError::host(format!(
                                         "invalid worker start request: {error}"
                                     ))),
                                 )?;
@@ -1025,7 +1025,7 @@ impl App {
                             } else {
                                 bridge.respond(
                                     &id,
-                                    Err(crate::ultracode_bridge::BridgeError::host(
+                                    Err(crate::workflow_bridge::BridgeError::host(
                                         "parent workflow session is unavailable",
                                     )),
                                 )?;
@@ -1033,7 +1033,7 @@ impl App {
                         }
                         Err(error) => bridge.respond(
                             &id,
-                            Err(crate::ultracode_bridge::BridgeError::worker_start(error)),
+                            Err(crate::workflow_bridge::BridgeError::worker_start(error)),
                         )?,
                     }
                     return Ok(());
@@ -1083,7 +1083,7 @@ impl App {
                 };
                 bridge.respond(
                     &id,
-                    result.map_err(crate::ultracode_bridge::BridgeError::host),
+                    result.map_err(crate::workflow_bridge::BridgeError::host),
                 )?;
             }
         }
@@ -1139,8 +1139,8 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let script = temp.path().join("bridge.mjs");
         std::fs::write(&script, r#"import readline from 'node:readline';for await(const line of readline.createInterface({input:process.stdin})) {const m=JSON.parse(line);process.stdout.write(JSON.stringify({id:m.id,ok:true,result:m.method==='listRuns'?{runs:[]}:{protocolVersion:1}})+'\n');}"#).unwrap();
-        let bridge = crate::ultracode_bridge::UltracodeBridge::spawn(
-            crate::ultracode_bridge::BridgeLaunch {
+        let bridge =
+            crate::workflow_bridge::WorkflowBridge::spawn(crate::workflow_bridge::BridgeLaunch {
                 node: "node".into(),
                 script,
                 plugin_root: temp.path().into(),
@@ -1149,10 +1149,9 @@ mod tests {
                 models: json!([]),
                 plugins: json!([]),
                 web_search_available: false,
-            },
-        )
-        .await
-        .unwrap();
+            })
+            .await
+            .unwrap();
         let mut session = WorkflowSession {
             bridge,
             pending_workers: HashMap::new(),

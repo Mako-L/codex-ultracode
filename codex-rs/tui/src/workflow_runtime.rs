@@ -27,7 +27,7 @@ impl WorkflowRuntime {
     fn for_install(install: &InstallContext) -> io::Result<Self> {
         // bundled_resource resolves files, not directories.
         let script = install
-            .bundled_resource("workflow-runtime/bin/ultracode.mjs")
+            .bundled_resource("workflow-runtime/bin/workflow.mjs")
             .ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::NotFound,
@@ -55,7 +55,7 @@ impl WorkflowRuntime {
             ));
         }
         let root = root.canonicalize()?;
-        let script = runtime_file(&root, "bin/ultracode.mjs")?;
+        let script = runtime_file(&root, "bin/workflow.mjs")?;
         let node = runtime_file(&root, NODE)?;
         #[cfg(unix)]
         {

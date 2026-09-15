@@ -1,8 +1,8 @@
 //! Shared launch preparation after the frontend's native route has authorized a workflow call.
-use crate::ultracode_bridge::BridgeError;
-use crate::ultracode_bridge::UltracodeBridge;
-use crate::ultracode_source::SourceLocation;
-use crate::ultracode_source::WorkflowSourcePreview;
+use crate::workflow_bridge::BridgeError;
+use crate::workflow_bridge::WorkflowBridge;
+use crate::workflow_source::SourceLocation;
+use crate::workflow_source::WorkflowSourcePreview;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_protocol::DynamicToolCallResponse;
 use codex_app_server_protocol::WorkflowAuthorityCaptureResponse;
@@ -11,7 +11,7 @@ use serde_json::json;
 use std::time::Duration;
 
 #[cfg(test)]
-#[path = "ultracode_launch_tests.rs"]
+#[path = "workflow_launch_tests.rs"]
 mod tests;
 
 pub(crate) struct WorkflowLaunch {
@@ -80,7 +80,7 @@ pub(crate) async fn launch(
     handle: &AppServerRequestHandle,
     parent_id: &str,
     authority: &WorkflowAuthorityCaptureResponse,
-    bridge: &UltracodeBridge,
+    bridge: &WorkflowBridge,
     arguments: &Value,
 ) -> Result<WorkflowLaunch, BridgeError> {
     launch_with_preview(
@@ -93,15 +93,15 @@ pub(crate) async fn launch_with_preview(
     handle: &AppServerRequestHandle,
     parent_id: &str,
     authority: &WorkflowAuthorityCaptureResponse,
-    bridge: &UltracodeBridge,
+    bridge: &WorkflowBridge,
     arguments: &Value,
     preview: Option<&WorkflowSourcePreview>,
 ) -> Result<WorkflowLaunch, BridgeError> {
     validate_arguments(arguments)?;
-    let selected_source = crate::ultracode_source::source_location(arguments)?;
+    let selected_source = crate::workflow_source::source_location(arguments)?;
     let verified = if let Some(preview) = preview {
         Some(
-            crate::ultracode_source::read_preview(
+            crate::workflow_source::read_preview(
                 handle,
                 parent_id,
                 authority,
@@ -119,7 +119,7 @@ pub(crate) async fn launch_with_preview(
         Some(verified.source.clone())
     } else if let SourceLocation::File(path) = selected_source {
         Some(
-            crate::ultracode_source::read_file(handle, parent_id, authority, path)
+            crate::workflow_source::read_file(handle, parent_id, authority, path)
                 .await?
                 .source,
         )

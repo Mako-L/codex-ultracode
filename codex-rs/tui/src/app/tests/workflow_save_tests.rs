@@ -39,7 +39,7 @@ const digest=createHash('sha256').update(source).digest('hex');
 for await(const line of readline.createInterface({input:process.stdin})){const request=JSON.parse(line);const result=request.method==='hello'?{protocolVersion:1}:request.method==='prepareSave'?{source,digest}:{};process.stdout.write(JSON.stringify({id:request.id,ok:true,result})+'\n');}"#,
     )?;
     let bridge =
-        crate::ultracode_bridge::UltracodeBridge::spawn(crate::ultracode_bridge::BridgeLaunch {
+        crate::workflow_bridge::WorkflowBridge::spawn(crate::workflow_bridge::BridgeLaunch {
             node: "node".into(),
             script: bridge_script,
             plugin_root: temp.path().to_path_buf(),

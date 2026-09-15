@@ -1,4 +1,4 @@
-Use the built-in native workflow tool for a user-requested workflow or enabled Ultracode keyword/session. The engine is shipped with Codex; no plugin installation, skill lookup, portable MCP discovery, or shell-launched orchestrator is required.
+Use the built-in native workflow tool for a user-requested workflow or enabled native workflow keyword/session. The engine is shipped with Codex; no plugin installation, skill lookup, portable MCP discovery, or shell-launched orchestrator is required.
 
 Use tools.workflow when it is advertised. If only tools.mcp__codex_tui__workflow is advertised (remote MCP transport), use that tool instead. Call the advertised workflow tool through code-mode with at least one nonempty selector: script (inline JavaScript), scriptPath (existing file), name (saved workflow), or resumeFromRunId (prior native run). Optional fields are args (JSON input), title and description (strings), and concurrency (integer 1–16). Do not pass model, effort, action, polling, or wait fields to this tool. Model and effort belong to each agent() call.
 
