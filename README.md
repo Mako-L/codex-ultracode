@@ -10,6 +10,7 @@ This tree is based on Codex `0.153.4`. It is not official OpenAI Codex and is no
 Download a package from [Releases](https://github.com/Mako-L/codex-ultracode/releases):
 
 - macOS Apple Silicon: `codex-package-aarch64-apple-darwin.tar.gz`
+- Linux ARM64: `codex-package-aarch64-unknown-linux-gnu.tar.gz`
 - Linux x86_64: `codex-package-x86_64-unknown-linux-gnu.tar.gz`
 - Windows x64: `codex-package-x86_64-pc-windows-msvc.zip`
 
@@ -58,6 +59,13 @@ export CODEX_REPO_ROOT="$PWD"
   --package-dir dist/codex-package \
   --archive-output dist/codex-package-aarch64-apple-darwin.tar.gz \
   --force
+```
+
+Linux packages are built on this Mac with OrbStack, not GitHub-hosted runners:
+
+```shell
+export CODEX_REPO_ROOT="$PWD"
+bash scripts/release-host-packages.sh v0.153.4-workflow.1
 ```
 
 See [Installing & building](./docs/install.md) for the Rust toolchain.
