@@ -509,7 +509,7 @@ impl ChatComposerConfig {
 
 pub(crate) struct ChatComposer {
     draft: DraftState,
-    workflow_keyword: RefCell<crate::ultracode_keyword::KeywordDraft>,
+    workflow_keyword: RefCell<crate::workflow_keyword::KeywordDraft>,
     workflow_keyword_enabled: bool,
     popups: PopupState,
     app_event_tx: AppEventSender,

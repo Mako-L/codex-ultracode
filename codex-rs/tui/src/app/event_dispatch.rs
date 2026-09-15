@@ -685,7 +685,7 @@ impl App {
             AppEvent::RunningTaskExit { action, thread_id } => match action {
                 RunningTaskExitAction::RunInBackground => {
                     let parents: Vec<_> = self.workflow_sessions.iter().map(|(id, session)| (id.clone(), session.bridge.clone())).collect();
-                    if let Err(error) = crate::ultracode_bridge::detach_all(&parents).await {
+                    if let Err(error) = crate::workflow_bridge::detach_all(&parents).await {
                         self.chat_widget.add_error_message(format!("Unable to detach workflows: {error}"));
                         return Ok(AppRunControl::Continue);
                     }

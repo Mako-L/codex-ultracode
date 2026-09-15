@@ -2,7 +2,7 @@ use crate::app_event::WorkflowPreviewMode;
 use crate::render::highlight::highlight_code_to_lines;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
-use crate::ultracode_source::WorkflowSourcePreview;
+use crate::workflow_source::WorkflowSourcePreview;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;

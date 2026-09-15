@@ -12,7 +12,7 @@ fn fixture() -> (TempDir, InstallContext, PathBuf) {
     let root = resources.join("workflow-runtime");
     fs::create_dir_all(root.join("bin")).unwrap();
     fs::create_dir_all(package.join("bin")).unwrap();
-    fs::write(root.join("bin/ultracode.mjs"), "// workflow engine").unwrap();
+    fs::write(root.join("bin/workflow.mjs"), "// workflow engine").unwrap();
     fs::write(root.join(NODE), "fixture executable").unwrap();
     #[cfg(unix)]
     {
@@ -36,7 +36,7 @@ fn packaged_runtime_uses_its_own_engine_and_node() {
     let (_directory, install, root) = fixture();
     let runtime = WorkflowRuntime::for_install(&install).unwrap();
     assert_eq!(runtime.root, root);
-    assert_eq!(runtime.script, root.join("bin/ultracode.mjs"));
+    assert_eq!(runtime.script, root.join("bin/workflow.mjs"));
     assert_eq!(runtime.node, root.join(NODE));
 }
 

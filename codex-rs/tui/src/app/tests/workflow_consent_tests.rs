@@ -96,11 +96,9 @@ async fn manual_inline_consent_disables_remember_and_starts_nothing() -> Result<
         .set(AskForApproval::OnRequest.to_core())?;
     app.config.approvals_reviewer = ApprovalsReviewer::User;
     let params = inline_call();
-    let preview = crate::ultracode_source::WorkflowSourcePreview::inline(
-        &params.thread_id,
-        &params.arguments,
-    )
-    .expect("inline workflow preview");
+    let preview =
+        crate::workflow_source::WorkflowSourcePreview::inline(&params.thread_id, &params.arguments)
+            .expect("inline workflow preview");
     app.show_workflow_consent(AppServerRequestId::Integer(42), params, preview);
     assert!(events.try_recv().is_err());
     assert!(app.workflow_sessions.is_empty());
@@ -127,7 +125,7 @@ async fn keyboard_cancellation_answers_pending_workflow_consent() -> Result<()> 
         let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
         let mut tui = crate::tui::test_support::make_test_tui()?;
         let params = inline_call();
-        let preview = crate::ultracode_source::WorkflowSourcePreview::inline(
+        let preview = crate::workflow_source::WorkflowSourcePreview::inline(
             &params.thread_id,
             &params.arguments,
         )

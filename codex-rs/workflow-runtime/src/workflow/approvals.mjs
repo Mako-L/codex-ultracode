@@ -35,7 +35,7 @@ function choices(record) {
 }
 export function approvalForm(record) {
   const options=choices(record);
-  const message=`Ultracode worker permission request\nRun: ${record.runId}\nAttempt: ${record.attempt}\nWorker: ${record.workerId}\n${record.method}\n${JSON.stringify(record.params,null,2)}${record.item?`\nTool details:\n${JSON.stringify(record.item,null,2)}`:''}\n\nChoices:\n${options.map((value,i)=>`decision-${i}: ${JSON.stringify(value)}`).join('\n')}`;
+  const message=`workflow worker permission request\nRun: ${record.runId}\nAttempt: ${record.attempt}\nWorker: ${record.workerId}\n${record.method}\n${JSON.stringify(record.params,null,2)}${record.item?`\nTool details:\n${JSON.stringify(record.item,null,2)}`:''}\n\nChoices:\n${options.map((value,i)=>`decision-${i}: ${JSON.stringify(value)}`).join('\n')}`;
   if(Buffer.byteLength(message)>512*1024)throw new Error('Approval prompt exceeds 512 KiB');
   return {mode:'form',message,requestedSchema:{type:'object',properties:{decision:{type:'string',title:'Permission decision',enum:options.map((_,i)=>`decision-${i}`)}},required:['decision']}};
 }

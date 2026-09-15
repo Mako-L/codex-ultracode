@@ -289,7 +289,7 @@ async fn headless_resume_does_not_wait_for_historical_completion_records() {
     fixture.close().await;
 }
 
-async fn configure_headless(client: &UltracodeBridge, root: &Path) -> Value {
+async fn configure_headless(client: &WorkflowBridge, root: &Path) -> Value {
     client
         .request(
             "configure",
@@ -414,8 +414,8 @@ async fn headless_connection_cannot_adopt_parent_from_another_plugin_root() {
     let other_root = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(other_root.path().join("bin")).unwrap();
     std::fs::copy(
-        fixture.parent.plugin_root.join("bin/ultracode.mjs"),
-        other_root.path().join("bin/ultracode.mjs"),
+        fixture.parent.plugin_root.join("bin/workflow.mjs"),
+        other_root.path().join("bin/workflow.mjs"),
     )
     .unwrap();
     install_fixture_node(other_root.path());

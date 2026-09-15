@@ -177,7 +177,9 @@ impl App {
                 app_server,
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
-                    format!("Ultracode requires xhigh reasoning support from model `{model}`"),
+                    format!(
+                        "native workflows require xhigh reasoning support from model `{model}`"
+                    ),
                 ),
             )
             .await;

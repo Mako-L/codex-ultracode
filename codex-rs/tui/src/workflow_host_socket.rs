@@ -74,7 +74,7 @@ fn read_token(path: &Path) -> io::Result<Value> {
     serde_json::from_reader(file).map_err(io::Error::other)
 }
 
-pub(crate) async fn connect(home: &Path) -> io::Result<UltracodeBridge> {
+pub(crate) async fn connect(home: &Path) -> io::Result<WorkflowBridge> {
     let directory =
         codex_app_server_daemon::workflow_backend_state_dir(home, &std::env::current_exe()?)
             .map_err(io::Error::other)?;
@@ -128,7 +128,7 @@ pub(crate) async fn connect(home: &Path) -> io::Result<UltracodeBridge> {
             }
         }
     };
-    let peer = UltracodeBridge::from_socket(stream).map_err(io::Error::other)?;
+    let peer = WorkflowBridge::from_socket(stream).map_err(io::Error::other)?;
     let authentication = peer
         .request(
             "authenticate",
@@ -149,7 +149,7 @@ pub(crate) async fn attach(
     home: &Path,
     parent_id: &str,
     plugin_root: &Path,
-) -> Result<UltracodeBridge, BridgeError> {
+) -> Result<WorkflowBridge, BridgeError> {
     let bridge = connect(home)
         .await
         .map_err(|error| BridgeError::host(error.to_string()))?;

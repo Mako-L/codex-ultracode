@@ -112,7 +112,7 @@ pub(crate) struct DynamicToolMcpServer {
     connection: ToolConnection,
     config: Value,
     task: JoinHandle<()>,
-    pub(crate) supervisor: Option<crate::ultracode_bridge::UltracodeBridge>,
+    pub(crate) supervisor: Option<crate::workflow_bridge::WorkflowBridge>,
 }
 
 impl DynamicToolMcpServer {
@@ -129,7 +129,7 @@ impl DynamicToolMcpServer {
         managed_requirement: Option<&McpServerRequirement>,
     ) -> std::io::Result<Self> {
         let plugin_root = crate::workflow_runtime::WorkflowRuntime::bundled()?.root;
-        let supervisor = crate::ultracode_host::connect(home).await?;
+        let supervisor = crate::workflow_host::connect(home).await?;
         let config = supervisor
             .request(
                 "configure",

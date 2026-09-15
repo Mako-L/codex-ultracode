@@ -1,4 +1,4 @@
-use crate::ultracode_bridge::BridgeError;
+use crate::workflow_bridge::BridgeError;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::RequestId;

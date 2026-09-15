@@ -13,7 +13,7 @@ pub(super) struct Workers {
 
 struct Worker {
     parent_id: String,
-    bridge: UltracodeBridge,
+    bridge: WorkflowBridge,
     request_id: String,
     run_id: String,
     worker_id: String,
@@ -363,5 +363,5 @@ impl Runtime {
 }
 
 #[cfg(test)]
-#[path = "ultracode_host_workers_tests.rs"]
+#[path = "workflow_host_workers_tests.rs"]
 mod tests;

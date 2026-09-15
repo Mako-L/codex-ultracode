@@ -159,10 +159,10 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
  else if(message.method==='shutdown'){send({id:message.id,ok:true,result:{stopped:true}});process.exit(0);}
 });"#).unwrap();
         std::fs::create_dir(directory.path().join("bin")).unwrap();
-        std::fs::copy(&script, directory.path().join("bin/ultracode.mjs")).unwrap();
+        std::fs::copy(&script, directory.path().join("bin/workflow.mjs")).unwrap();
         install_fixture_node(directory.path());
         let state = directory.path().join("state");
-        let bridge = UltracodeBridge::spawn(BridgeLaunch {
+        let bridge = WorkflowBridge::spawn(BridgeLaunch {
             node: "node".into(),
             script,
             plugin_root: directory.path().into(),
@@ -220,21 +220,21 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
         binding
     }
 
-    async fn attach(&self) -> (UltracodeBridge, tokio::task::JoinHandle<io::Result<()>>) {
+    async fn attach(&self) -> (WorkflowBridge, tokio::task::JoinHandle<io::Result<()>>) {
         self.connect(Some(&self.parent_id)).await
     }
 
     async fn connect(
         &self,
         parent_id: Option<&str>,
-    ) -> (UltracodeBridge, tokio::task::JoinHandle<io::Result<()>>) {
+    ) -> (WorkflowBridge, tokio::task::JoinHandle<io::Result<()>>) {
         let (client, server) = std::os::unix::net::UnixStream::pair().unwrap();
         server.set_nonblocking(true).unwrap();
         let server = tokio::net::UnixStream::from_std(server).unwrap();
         let runtime = self.runtime.clone();
         let task =
             tokio::spawn(async move { socket::serve(runtime, server, json!("secret")).await });
-        let client = UltracodeBridge::from_socket(client).unwrap();
+        let client = WorkflowBridge::from_socket(client).unwrap();
         client
             .request("authenticate", json!({"token":"secret"}), REQUEST_TIMEOUT)
             .await
@@ -252,7 +252,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
         (client, task)
     }
 
-    async fn launch(&mut self, client: &UltracodeBridge) {
+    async fn launch(&mut self, client: &WorkflowBridge) {
         let params = self.launch_params();
         client
             .request("runSource", params, REQUEST_TIMEOUT)
@@ -678,7 +678,7 @@ async fn parent_creates_state_directory_before_bridge_spawn() {
     let bridge_script = std::fs::read_to_string(fixture._directory.path().join("peer.mjs"))
         .unwrap()
         .replace("fs.mkdirSync(stateDir,{recursive:true});", "");
-    std::fs::write(plugin_root.join("bin/ultracode.mjs"), bridge_script).unwrap();
+    std::fs::write(plugin_root.join("bin/workflow.mjs"), bridge_script).unwrap();
     install_fixture_node(&plugin_root);
 
     let parent_id = Uuid::new_v4().to_string();
@@ -754,7 +754,7 @@ async fn parent_bridges_and_templates_use_their_explicit_plugin_roots() {
         std::fs::create_dir_all(root.join("bin")).unwrap();
         std::fs::copy(
             fixture._directory.path().join("peer.mjs"),
-            root.join("bin/ultracode.mjs"),
+            root.join("bin/workflow.mjs"),
         )
         .unwrap();
         install_fixture_node(&root);
@@ -828,7 +828,7 @@ async fn second_parent_detach_failure_reattaches_first_and_allows_retry() {
         (fixture.parent_id.clone(), first.clone()),
         (second_id, second.clone()),
     ];
-    assert!(crate::ultracode_bridge::detach_all(&parents).await.is_err());
+    assert!(crate::workflow_bridge::detach_all(&parents).await.is_err());
     assert!(fixture.parent.attachment.lock().unwrap().is_some());
     assert!(second_parent.attachment.lock().unwrap().is_some());
     assert_eq!(
@@ -842,7 +842,7 @@ async fn second_parent_detach_failure_reattaches_first_and_allows_retry() {
             .is_empty()
     );
     std::fs::remove_dir(blocked).unwrap();
-    crate::ultracode_bridge::detach_all(&parents).await.unwrap();
+    crate::workflow_bridge::detach_all(&parents).await.unwrap();
     assert!(fixture.parent.attachment.lock().unwrap().is_none());
     assert!(second_parent.attachment.lock().unwrap().is_none());
     first_connection.abort();
@@ -850,11 +850,11 @@ async fn second_parent_detach_failure_reattaches_first_and_allows_retry() {
     fixture.close().await;
 }
 
-#[path = "ultracode_headless_lifecycle_tests.rs"]
+#[path = "workflow_headless_lifecycle_tests.rs"]
 mod headless_lifecycle;
 
-#[path = "ultracode_attachment_failure_tests.rs"]
+#[path = "workflow_attachment_failure_tests.rs"]
 mod attachment_failure;
 
-#[path = "ultracode_worker_interrupt_tests.rs"]
+#[path = "workflow_worker_interrupt_tests.rs"]
 mod worker_interrupt;

@@ -1404,7 +1404,7 @@ pub(crate) enum WorkflowEvent {
         args: Option<String>,
         choice: WorkflowConsentChoice,
         feedback: Option<String>,
-        preview: Option<crate::ultracode_source::WorkflowSourcePreview>,
+        preview: Option<crate::workflow_source::WorkflowSourcePreview>,
     },
     ToolCall {
         request_id: codex_app_server_protocol::RequestId,
@@ -1415,7 +1415,7 @@ pub(crate) enum WorkflowEvent {
         params: codex_app_server_protocol::DynamicToolCallParams,
         choice: WorkflowConsentChoice,
         feedback: Option<String>,
-        preview: Option<crate::ultracode_source::WorkflowSourcePreview>,
+        preview: Option<crate::workflow_source::WorkflowSourcePreview>,
     },
     ViewScript {
         thread_id: String,
@@ -1424,13 +1424,13 @@ pub(crate) enum WorkflowEvent {
     ToggleWorkflowPreview {
         consent: WorkflowConsentContext,
         feedback_state: WorkflowConsentFeedbackState,
-        preview: crate::ultracode_source::WorkflowSourcePreview,
+        preview: crate::workflow_source::WorkflowSourcePreview,
         mode: WorkflowPreviewMode,
     },
     EditWorkflowSource {
         consent: WorkflowConsentContext,
         feedback_state: WorkflowConsentFeedbackState,
-        preview: crate::ultracode_source::WorkflowSourcePreview,
+        preview: crate::workflow_source::WorkflowSourcePreview,
     },
     Open {
         effort: Option<String>,
@@ -1438,19 +1438,19 @@ pub(crate) enum WorkflowEvent {
     Ready {
         parent_thread_id: String,
         effort: Option<String>,
-        result: Result<(crate::ultracode_bridge::UltracodeBridge, serde_json::Value), String>,
+        result: Result<(crate::workflow_bridge::WorkflowBridge, serde_json::Value), String>,
     },
     Refresh,
     RunChanged {
-        bridge: crate::ultracode_bridge::UltracodeBridge,
+        bridge: crate::workflow_bridge::WorkflowBridge,
         run_id: String,
     },
     Snapshot {
-        bridge: crate::ultracode_bridge::UltracodeBridge,
+        bridge: crate::workflow_bridge::WorkflowBridge,
         result: Result<serde_json::Value, String>,
     },
     HostRequest {
-        bridge: crate::ultracode_bridge::UltracodeBridge,
+        bridge: crate::workflow_bridge::WorkflowBridge,
         id: String,
         method: String,
         params: serde_json::Value,

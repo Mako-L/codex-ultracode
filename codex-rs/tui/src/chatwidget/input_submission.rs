@@ -392,14 +392,14 @@ impl ChatWidget {
             if self.config.ultracode && !self.config.disable_workflows {
                 context.insert("ultracode_session".to_string(),codex_app_server_protocol::AdditionalContextEntry {
                     kind:codex_app_server_protocol::AdditionalContextKind::Application,
-                    value:"The user enabled Ultracode for this session. Use the advertised built-in workflow tool and its authoring instructions to carry out the request; no plugin or skill lookup is needed. The parent uses xhigh reasoning; explicit worker model and effort choices remain independent.".to_string(),
+                    value:"The user enabled native workflows for this session. Use the advertised built-in workflow tool and its authoring instructions to carry out the request; no plugin or skill lookup is needed. The parent uses xhigh reasoning; explicit worker model and effort choices remain independent.".to_string(),
                 });
             }
             if let Some(enabled) = workflow_keyword {
                 context.insert("ultracode_keyword".to_string(), codex_app_server_protocol::AdditionalContextEntry {
                     kind: codex_app_server_protocol::AdditionalContextKind::Application,
                     value: if enabled {
-                        "The user enabled Ultracode for this message through the interactive workflow keyword. Use the advertised built-in workflow tool and its authoring instructions to carry out the request; no plugin or skill lookup is needed. This choice does not change session reasoning effort."
+                        "The user enabled native workflows for this message through the interactive workflow keyword. Use the advertised built-in workflow tool and its authoring instructions to carry out the request; no plugin or skill lookup is needed. This choice does not change session reasoning effort."
                     } else {
                         "The user explicitly dismissed the interactive workflow keyword for this message. Do not enable a workflow merely because its text contains ultracode. A separate explicit workflow request or enabled session workflow mode still applies."
                     }.to_string(),

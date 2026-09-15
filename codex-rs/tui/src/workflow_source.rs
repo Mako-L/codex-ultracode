@@ -1,5 +1,5 @@
-use crate::ultracode_bridge::BridgeError;
-use crate::ultracode_bridge::UltracodeBridge;
+use crate::workflow_bridge::BridgeError;
+use crate::workflow_bridge::WorkflowBridge;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::RequestId;
@@ -15,7 +15,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 #[cfg(test)]
-#[path = "ultracode_source_tests.rs"]
+#[path = "workflow_source_tests.rs"]
 mod tests;
 
 /// Source bytes and identity selected for one originating thread's consent.
@@ -180,7 +180,7 @@ pub(crate) async fn read_preview(
     handle: &AppServerRequestHandle,
     thread_id: &str,
     authority: &WorkflowAuthorityCaptureResponse,
-    bridge: &UltracodeBridge,
+    bridge: &WorkflowBridge,
     arguments: &Value,
     selected: Option<&WorkflowSourcePreview>,
 ) -> Result<WorkflowSourcePreview, BridgeError> {

@@ -26,7 +26,7 @@ The builder creates a canonical Codex package directory:
 │   ├── codex-command-runner.exe          # Windows only
 │   ├── codex-windows-sandbox-setup.exe   # Windows only
 │   └── workflow-runtime                  # Codex-owned workflow engine
-│       ├── bin/ultracode.mjs
+│       ├── bin/workflow.mjs
 │       ├── src/
 │       ├── package.json
 │       ├── package-lock.json

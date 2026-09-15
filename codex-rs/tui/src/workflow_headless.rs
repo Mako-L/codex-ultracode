@@ -1,5 +1,5 @@
 //! Explicit headless frontend for the native workflow supervisor.
-use crate::ultracode_bridge::UltracodeBridge;
+use crate::workflow_bridge::WorkflowBridge;
 use codex_app_server_client::AppServerClient;
 use codex_app_server_client::RemoteAppServerEndpoint;
 use codex_app_server_client::legacy_core::config::Config;
@@ -11,7 +11,7 @@ use std::time::Duration;
 
 /// Authenticated control connection for a CLI-selected headless workflow route.
 #[derive(Clone)]
-pub struct HeadlessWorkflowController(UltracodeBridge);
+pub struct HeadlessWorkflowController(WorkflowBridge);
 
 impl HeadlessWorkflowController {
     /// Inspect workflow completion state or deliberately stop this parent's workflows.
@@ -52,7 +52,7 @@ pub async fn prepare(
     .await
     .map_err(io::Error::other)?;
     let socket_path = codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(socket_path)?;
-    let supervisor = crate::ultracode_host::connect(&config.codex_home).await?;
+    let supervisor = crate::workflow_host::connect(&config.codex_home).await?;
     let mcp = supervisor.request("configure", json!({"threadStartParams":thread_start_params,"pluginRoot":root,"frontend":"headless"}), Duration::from_secs(30))
         .await.map_err(io::Error::other)?;
     if let Some(requirements) = config
