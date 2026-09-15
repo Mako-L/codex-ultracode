@@ -16,7 +16,8 @@ fn workflow_status_line(
     let mut current = None;
     let mut indicator = " ●".green();
     for run in snapshot["runs"].as_array()? {
-        if !matches!(run["status"].as_str(), Some("running" | "paused")) {
+        let status = run["status"].as_str();
+        if !matches!(status, Some("running" | "paused" | "completed" | "stopped")) {
             continue;
         }
         runs += 1;
@@ -26,11 +27,14 @@ fn workflow_status_line(
             .unwrap_or_default();
         agents += workers.len();
         if runs == 1 {
-            indicator = if run["status"].as_str() == Some("paused") {
+            indicator = if status == Some("paused") {
                 " ●".yellow()
-            } else if workers
-                .iter()
-                .any(|worker| worker["status"].as_str() == Some("failed"))
+            } else if status == Some("completed") {
+                " ◯".into()
+            } else if status == Some("stopped")
+                || workers
+                    .iter()
+                    .any(|worker| worker["status"].as_str() == Some("failed"))
             {
                 " ●".red()
             } else {
@@ -42,16 +46,59 @@ fn workflow_status_line(
                 .as_str()
                 .filter(|name| name.chars().any(|c| !c.is_control() && !c.is_whitespace()))
         {
-            let completed = workers
-                .iter()
-                .filter(|worker| worker["status"].as_str() == Some("completed"))
-                .count();
+            let completed = if status == Some("completed") {
+                workers.len()
+            } else {
+                workers
+                    .iter()
+                    .filter(|worker| worker["status"].as_str() == Some("completed"))
+                    .count()
+            };
             let name: String = name.chars().filter(|c| !c.is_control()).take(60).collect();
-            current = Some(format!(
-                " {name} · {completed}/{} agents · {}",
-                workers.len(),
-                run["status"].as_str().unwrap_or_default()
-            ));
+            current = Some(if status == Some("completed") {
+                let description = run["description"]
+                    .as_str()
+                    .map(|value| {
+                        value
+                            .chars()
+                            .filter(|c| !c.is_control())
+                            .take(80)
+                            .collect::<String>()
+                    })
+                    .filter(|value| value.chars().any(|c| !c.is_whitespace()))
+                    .map(|value| format!("  {value}"))
+                    .unwrap_or_default();
+                let elapsed = match (
+                    run["startedAt"]
+                        .as_str()
+                        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok()),
+                    run["endedAt"]
+                        .as_str()
+                        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok()),
+                ) {
+                    (Some(started), Some(ended)) => {
+                        let seconds = (ended - started).num_seconds().max(0) as u64;
+                        if seconds >= 60 {
+                            format!(" · {}m {}s", seconds / 60, seconds % 60)
+                        } else {
+                            format!(" · {seconds}s")
+                        }
+                    }
+                    _ => String::new(),
+                };
+                format!(
+                    " {name}{description}  {completed}/{} agents done{elapsed}",
+                    workers.len()
+                )
+            } else {
+                format!(
+                    " {name} · {completed}/{} agents · {}",
+                    workers.len(),
+                    status.unwrap_or_default()
+                )
+            });
+        } else if current.is_none() && status == Some("completed") {
+            current = Some(format!(" {}/{} agents done", workers.len(), workers.len()));
         }
         let started = workers
             .iter()
