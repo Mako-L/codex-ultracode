@@ -7,13 +7,32 @@ This tree is based on Codex `0.153.4`. It is not official OpenAI Codex and is no
 
 ## Install
 
-Apple Silicon only for this release (`aarch64-apple-darwin`).
+Download a package from [Releases](https://github.com/Mako-L/codex-ultracode/releases):
+
+- macOS Apple Silicon: `codex-package-aarch64-apple-darwin.tar.gz`
+- Linux x86_64: `codex-package-x86_64-unknown-linux-gnu.tar.gz`
+- Linux arm64: `codex-package-aarch64-unknown-linux-gnu.tar.gz`
+- Windows x64: `codex-package-x86_64-pc-windows-msvc.zip`
+
+macOS / Linux:
 
 ```shell
-gh release download --repo Mako-L/codex-ultracode --pattern 'codex-package-aarch64-apple-darwin.tar.gz'
+gh release download --repo Mako-L/codex-ultracode --pattern 'codex-package-<target>.tar.gz'
 mkdir -p "$HOME/.local/codex-ultracode"
-tar -xzf codex-package-aarch64-apple-darwin.tar.gz -C "$HOME/.local/codex-ultracode"
-ln -sf "$HOME/.local/codex-ultracode/bin/codex" "$HOME/.local/bin/codex-ultracode"
+tar -xzf codex-package-*.tar.gz -C "$HOME/.local/codex-ultracode"
+printf '%s\n' '#!/bin/sh' 'exec "$HOME/.local/codex-ultracode/bin/codex" --native-workflow-host "$@"' > "$HOME/.local/bin/codex-ultracode"
+chmod +x "$HOME/.local/bin/codex-ultracode"
+```
+
+Windows (PowerShell):
+
+```powershell
+gh release download --repo Mako-L/codex-ultracode --pattern 'codex-package-x86_64-pc-windows-msvc.zip'
+Expand-Archive .\codex-package-x86_64-pc-windows-msvc.zip -DestinationPath "$env:LOCALAPPDATA\codex-ultracode" -Force
+@'
+@echo off
+"%LOCALAPPDATA%\codex-ultracode\bin\codex.exe" --native-workflow-host %*
+'@ | Set-Content -Path "$env:LOCALAPPDATA\Microsoft\WindowsApps\codex-ultracode.cmd"
 ```
 
 ## Run

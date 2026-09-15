@@ -1,0 +1,134 @@
+name: workflow-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to attach packages to
+        required: true
+        default: v0.153.4-workflow.1
+        type: string
+  push:
+    tags:
+      - "v*.*.*-workflow.*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: workflow-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "24.14.0"
+  PACKAGE_VERSION: "0.153.4-workflow.1"
+
+jobs:
+  package:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            node_url: https://nodejs.org/dist/v24.14.0/node-v24.14.0-linux-x64.tar.gz
+            node_path: node-v24.14.0-linux-x64/bin/node
+            archive_ext: tar.gz
+            binary_name: codex-x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            node_url: https://nodejs.org/dist/v24.14.0/node-v24.14.0-linux-arm64.tar.gz
+            node_path: node-v24.14.0-linux-arm64/bin/node
+            archive_ext: tar.gz
+            binary_name: codex-aarch64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            node_url: https://nodejs.org/dist/v24.14.0/node-v24.14.0-win-x64.zip
+            node_path: node-v24.14.0-win-x64/node.exe
+            archive_ext: zip
+            binary_name: codex-x86_64-pc-windows-msvc.exe
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-ci
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Linux package deps
+        if: runner.os == 'Linux'
+        shell: bash
+        run: sudo apt-get update && sudo apt-get install -y libcap-dev pkg-config
+
+      - name: Fetch standalone Node
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/release-node"
+          cd "$RUNNER_TEMP/release-node"
+          curl -fsSL -o node-asset "${{ matrix.node_url }}"
+          case "${{ matrix.node_url }}" in
+            *.zip) python3 -c "import zipfile; zipfile.ZipFile('node-asset').extractall('.')" ;;
+            *) tar -xzf node-asset ;;
+          esac
+          node_bin="$PWD/${{ matrix.node_path }}"
+          test -f "$node_bin"
+          echo "RELEASE_NODE_BIN=$node_bin" >> "$GITHUB_ENV"
+
+      - name: Build package
+        shell: bash
+        env:
+          LIBSQLITE3_FLAGS: ${{ runner.os == 'Windows' && 'SQLITE_DISABLE_INTRINSIC' || '' }}
+        run: |
+          set -euo pipefail
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          mkdir -p dist/bin-only
+          python3 scripts/build_codex_package.py \
+            --target "${{ matrix.target }}" \
+            --variant codex \
+            --cargo-profile release \
+            --package-version "$PACKAGE_VERSION" \
+            --node-bin "$RELEASE_NODE_BIN" \
+            --package-dir "$PWD/dist/codex-package" \
+            --force
+          if [[ "${{ runner.os }}" == "Linux" ]]; then
+            strip --strip-unneeded dist/codex-package/bin/codex dist/codex-package/bin/codex-code-mode-host dist/codex-package/codex-resources/bwrap || true
+          fi
+          if [[ "${{ matrix.archive_ext }}" == "zip" ]]; then
+            python3 -c "from pathlib import Path; import zipfile; root=Path('dist/codex-package'); out=Path('dist/codex-package-${{ matrix.target }}.zip');
+zf=zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED);
+[zf.write(p, p.relative_to(root).as_posix()) for p in root.rglob('*') if p.is_file()];
+zf.close(); print(out)"
+            cp dist/codex-package/bin/codex.exe "dist/bin-only/${{ matrix.binary_name }}"
+            python3 -c "from pathlib import Path; import zipfile; src=Path('dist/bin-only/${{ matrix.binary_name }}'); out=Path('dist/${{ matrix.binary_name }}.zip'); zf=zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED); zf.write(src, src.name); zf.close(); print(out)"
+          else
+            tar -C dist/codex-package -czf "dist/codex-package-${{ matrix.target }}.tar.gz" .
+            cp dist/codex-package/bin/codex "dist/bin-only/${{ matrix.binary_name }}"
+            tar -C dist/bin-only -czf "dist/${{ matrix.binary_name }}.tar.gz" "${{ matrix.binary_name }}"
+          fi
+          echo "RELEASE_TAG=$tag" >> "$GITHUB_ENV"
+
+      - name: Upload release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          assets=(dist/codex-package-${{ matrix.target }}.${{ matrix.archive_ext }})
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            assets+=("dist/${{ matrix.binary_name }}.zip")
+          else
+            assets+=("dist/${{ matrix.binary_name }}.tar.gz")
+          fi
+          gh release upload "$RELEASE_TAG" "${assets[@]}" --repo "${{ github.repository }}" --clobber
