@@ -17,6 +17,7 @@ use crate::types::AuthCredentialsStoreMode;
 use crate::types::FeedbackConfigToml;
 use crate::types::History;
 use crate::types::MarketplaceConfig;
+use crate::types::McpEnterpriseManagedAuthConfig;
 use crate::types::McpServerConfig;
 use crate::types::MemoriesToml;
 use crate::types::Notice;
@@ -213,6 +214,13 @@ pub struct ConfigToml {
     /// Sandbox mode to use.
     pub sandbox_mode: Option<SandboxMode>,
 
+    /// Allow macOS sandbox writable roots at or beneath CODEX_HOME to traverse
+    /// symlinks. Read only from the host's user config at startup; defaults to false.
+    /// This grants no write access by itself, but trusts symlink targets even if
+    /// they change between commands or lie outside CODEX_HOME.
+    /// This setting has no effect on Linux or Windows.
+    pub allow_symlinked_codex_home: Option<bool>,
+
     /// Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`.
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
 
@@ -278,6 +286,10 @@ pub struct ConfigToml {
     #[schemars(schema_with = "crate::schema::mcp_servers_schema")]
     pub mcp_servers: HashMap<String, McpServerConfig>,
 
+    /// Trusted enterprise IdP shared by EMA-enabled MCP servers and plugins.
+    #[serde(default)]
+    pub mcp_enterprise_managed_auth: Option<McpEnterpriseManagedAuthConfig>,
+
     /// Preferred backend for storing MCP OAuth credentials.
     /// keyring: Use an OS-specific keyring service.
     ///          https://github.com/openai/codex/blob/main/codex-rs/rmcp-client/src/oauth.rs#L2
@@ -321,6 +333,10 @@ pub struct ConfigToml {
     /// Maximum poll window for background terminal output (`write_stdin`), in milliseconds.
     /// Default: `300000` (5 minutes).
     pub background_terminal_max_timeout: Option<u64>,
+
+    /// Seconds a thread must have no subscribers and no activity before app-server
+    /// unloads it. Defaults to 60; zero unloads immediately. Changes require a server restart.
+    pub thread_unload_delay_secs: Option<u64>,
 
     /// Deprecated: ignored.
     #[schemars(skip)]
@@ -556,6 +572,8 @@ pub enum ThreadStoreToml {
 pub struct AutoReviewToml {
     /// Additional policy instructions inserted into the guardian prompt.
     pub policy: Option<String>,
+    /// Experimental full Guardian prompt template containing the tenant policy placeholder.
+    pub experimental_policy_template: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
@@ -935,10 +953,14 @@ pub fn validate_model_providers(
 ) -> Result<(), String> {
     validate_reserved_model_provider_ids(model_providers)?;
     for (key, provider) in model_providers {
-        if !matches!(
+        if matches!(
             key.as_str(),
             AMAZON_BEDROCK_PROVIDER_ID | AMAZON_BEDROCK_RUNTIME_PROVIDER_ID
         ) {
+            provider
+                .validate_bedrock_override()
+                .map_err(|message| format!("model_providers.{key} {message}"))?;
+        } else {
             if provider.aws.is_some() {
                 return Err(format!(
                     "model_providers.{key}: provider aws is only supported for \
@@ -1024,6 +1046,16 @@ mod tests {
             Some(WorkflowSizeGuideline::Small)
         );
         assert!(toml::from_str::<ConfigToml>("workflow_size_guideline = 'huge'").is_err());
+    }
+
+    #[test]
+    fn thread_unload_delay_requires_nonnegative_seconds() {
+        for value in ["-1", "1.5", "\"60\""] {
+            let error =
+                toml::from_str::<ConfigToml>(&format!("thread_unload_delay_secs = {value}"))
+                    .expect_err("idle timeout must be a nonnegative integer");
+            assert!(error.to_string().contains("thread_unload_delay_secs"));
+        }
     }
 
     #[test]

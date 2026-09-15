@@ -1,3 +1,5 @@
+use codex_history::RetainedContext;
+
 use codex_protocol::models::ResponseItem;
 
 /// Read-only conversation-history snapshot supplied by the extension host.
@@ -14,6 +16,24 @@ pub trait ConversationHistorySnapshot: Send + Sync {
 
     /// Returns the snapshot's response items in conversation order.
     fn items(&self) -> Box<dyn Iterator<Item = &ResponseItem> + Send + '_>;
+
+    /// Host-owned retained facts captured atomically with the parent model window.
+    /// These facts may be available while review still uses a legacy transcript.
+    fn retained_context(&self) -> Option<&RetainedContext> {
+        None
+    }
+
+    /// Whether review uses the parent checkpoint and model window instead of a legacy transcript.
+    /// Checkpoint compatibility is independent of access to retained user evidence.
+    fn uses_parent_context_for_review(&self) -> bool {
+        self.retained_context().is_some()
+    }
+
+    /// Producer compatibility recorded on the latest opaque checkpoint. Missing provenance
+    /// must not be inferred from the currently selected model, including after resume.
+    fn latest_compaction_model_hash(&self) -> Option<&str> {
+        None
+    }
 
     /// Original review evidence retained across parent compaction, in conversation order.
     /// Hosts without separate retention provide their current history.

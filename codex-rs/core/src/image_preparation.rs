@@ -15,11 +15,11 @@ use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_utils_image::ImageProcessingError;
 use codex_utils_image::PromptImageMode;
-use codex_utils_image::PromptImageResizeLimits;
 use codex_utils_image::load_data_url_for_prompt;
 use tracing::warn;
 
@@ -30,15 +30,6 @@ const IMAGE_TOO_LARGE_PLACEHOLDER: &str =
 const UNSUPPORTED_LOW_DETAIL_PLACEHOLDER: &str = "image content omitted because detail 'low' is not supported; use 'high', 'original', or 'auto'";
 const REMOTE_IMAGE_URL_PLACEHOLDER: &str =
     "image content omitted because remote image URLs are not supported";
-
-const HIGH_DETAIL_LIMITS: PromptImageResizeLimits = PromptImageResizeLimits {
-    max_dimension: 2048,
-    max_patches: 2_500,
-};
-const UNIFIED_IMAGE_LIMITS: PromptImageResizeLimits = PromptImageResizeLimits {
-    max_dimension: 6000,
-    max_patches: 10_000,
-};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ImagePreparationMode {
@@ -167,6 +158,7 @@ pub(crate) fn prepare_response_items(
             | ResponseItem::WebSearchCall { .. }
             | ResponseItem::ImageGenerationCall { .. }
             | ResponseItem::Compaction { .. }
+            | ResponseItem::ConfigurationUpdate { .. }
             | ResponseItem::CompactionTrigger { .. }
             | ResponseItem::ContextCompaction { .. }
             | ResponseItem::Other => None,
@@ -187,6 +179,8 @@ fn prepare_message_content(
     metadata: &mut Vec<ImagePreparationMetadata>,
     mode: ImagePreparationMode,
 ) -> Vec<ResizedImage> {
+    // TODO(kc) Prepare file-backed images once Core has an explicit resolution contract. Until
+    // then they pass through while retaining their positions in resize notices.
     let image_count = items
         .iter()
         .filter(|item| matches!(item.content(), ContentItem::InputImage { .. }))
@@ -194,8 +188,14 @@ fn prepare_message_content(
     let mut image_number = 0;
     let mut resized_images = Vec::new();
     for item in items {
-        if let ContentItem::InputImage { image_url, detail } = item.content_mut() {
+        if matches!(item.content(), ContentItem::InputImage { .. }) {
             image_number += 1;
+        }
+        if let ContentItem::InputImage {
+            image: ImageReference::Inline { image_url },
+            detail,
+        } = item.content_mut()
+        {
             match prepare_image(image_url, detail, origin, metadata, mode) {
                 Ok(Some(resize)) if resize_notice_mode == ImageResizeNoticeMode::Enabled => {
                     resized_images.push(ResizedImage {
@@ -235,8 +235,14 @@ fn prepare_tool_output_content(
     let mut image_number = 0;
     let mut resized_images = Vec::new();
     for item in items {
-        if let FunctionCallOutputContentItem::InputImage { image_url, detail } = item {
+        if matches!(item, FunctionCallOutputContentItem::InputImage { .. }) {
             image_number += 1;
+        }
+        if let FunctionCallOutputContentItem::InputImage {
+            image: ImageReference::Inline { image_url },
+            detail,
+        } = item
+        {
             match prepare_image(image_url, detail, origin, metadata, mode) {
                 Ok(Some(resize)) if resize_notice_mode == ImageResizeNoticeMode::Enabled => {
                     resized_images.push(ResizedImage {
@@ -287,17 +293,23 @@ fn prepare_image(
         return Ok(None);
     }
 
-    let (effective_detail, limits) = match mode {
-        ImagePreparationMode::UnifiedBudget => (ImageDetailSetting::Original, UNIFIED_IMAGE_LIMITS),
+    let (effective_detail, image_mode) = match mode {
+        ImagePreparationMode::UnifiedBudget => (
+            ImageDetailSetting::Original,
+            PromptImageMode::ORIGINAL_DETAIL,
+        ),
         ImagePreparationMode::DetailBased => match detail {
             None | Some(ImageDetail::Auto | ImageDetail::High) => {
-                (ImageDetailSetting::High, HIGH_DETAIL_LIMITS)
+                (ImageDetailSetting::High, PromptImageMode::HIGH_DETAIL)
             }
-            Some(ImageDetail::Original) => (ImageDetailSetting::Original, UNIFIED_IMAGE_LIMITS),
+            Some(ImageDetail::Original) => (
+                ImageDetailSetting::Original,
+                PromptImageMode::ORIGINAL_DETAIL,
+            ),
             Some(ImageDetail::Low) => return Err(ImagePreparationError::UnsupportedLowDetail),
         },
     };
-    let image = load_data_url_for_prompt(image_url, PromptImageMode::ResizeWithLimits(limits))?;
+    let image = load_data_url_for_prompt(image_url, image_mode)?;
     metadata.push(ImagePreparationMetadata {
         message_role: origin.message_role.map(str::to_string),
         item_id: origin.item_id.map(str::to_string),

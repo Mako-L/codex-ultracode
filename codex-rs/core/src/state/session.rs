@@ -3,6 +3,7 @@
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::BaseInstructionsProvenance;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -29,16 +30,55 @@ use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TokenUsageRecord;
 use codex_protocol::protocol::TurnContextItem;
 use codex_utils_output_truncation::TruncationPolicy;
+use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
+
+/// Runtime request effort, initially unset and established by prewarm or sampling.
+/// Successful compaction allows a fresh baseline without an override.
+pub(crate) enum ReasoningEffortPin {
+    Unset,
+    Compacted,
+    Active {
+        model: String,
+        effort: ReasoningEffort,
+    },
+}
+
+impl ReasoningEffortPin {
+    pub(crate) fn get(&self, model: &str) -> Option<ReasoningEffort> {
+        match self {
+            Self::Active {
+                model: pinned_model,
+                effort,
+            } if pinned_model == model => Some(effort.clone()),
+            Self::Unset | Self::Compacted | Self::Active { .. } => None,
+        }
+    }
+
+    pub(crate) fn pin(&mut self, model: &str, effort: ReasoningEffort) -> ReasoningEffort {
+        if let Some(pinned) = self.get(model) {
+            return pinned;
+        }
+        *self = Self::Active {
+            model: model.to_owned(),
+            effort: effort.clone(),
+        };
+        effort
+    }
+}
 
 /// Persistent, session-scoped state previously stored directly on `Session`.
 pub(crate) struct SessionState {
     /// Live command cancellation signals also cover processes that outlive their turn.
     pub(crate) command_approval_cancellations: HashMap<(String, String), Arc<AtomicBool>>,
     pub(crate) session_configuration: SessionConfiguration,
+    /// Plugin selection of the last admitted task; settings updates take effect on the next task.
+    pub(crate) active_disabled_plugin_ids: Vec<String>,
     /// Persisted origin of the session base instructions, when known.
     pub(crate) base_instructions_provenance: Option<BaseInstructionsProvenance>,
     pub(crate) history: ContextManager,
+    /// Cancels work bound to discarded history or a superseded Guardian evidence policy.
+    pub(crate) history_reset: CancellationToken,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
     pub(crate) latest_token_usage_record: Option<TokenUsageRecord>,
     pub(crate) server_reasoning_included: bool,
@@ -50,6 +90,8 @@ pub(crate) struct SessionState {
     previous_turn_settings: Option<PreviousTurnSettings>,
     /// Runtime accounting state for the active auto-compaction window.
     auto_compact_window: AutoCompactWindow,
+    /// Original request effort for the current model while configuration updates remain active.
+    pub(crate) reasoning_effort_pin: ReasoningEffortPin,
     /// Startup prewarmed session prepared during session initialization.
     pub(crate) startup_prewarm: Option<SessionStartupPrewarmHandle>,
     /// Retained after completion so later turns do not repeat speculative captures.
@@ -68,18 +110,21 @@ impl SessionState {
         Self::new_with_auto_compact_window_ids(
             session_configuration,
             AutoCompactWindowIds::new_initial(),
+            ContextManager::new(),
         )
     }
 
     pub(crate) fn new_with_auto_compact_window_ids(
         session_configuration: SessionConfiguration,
         auto_compact_window_ids: AutoCompactWindowIds,
+        history: ContextManager,
     ) -> Self {
-        let history = ContextManager::new();
         Self {
+            active_disabled_plugin_ids: Vec::new(),
             session_configuration,
             base_instructions_provenance: None,
             history,
+            history_reset: CancellationToken::new(),
             latest_rate_limits: None,
             latest_token_usage_record: None,
             server_reasoning_included: false,
@@ -87,6 +132,7 @@ impl SessionState {
             additional_context: AdditionalContextStore::default(),
             previous_turn_settings: None,
             auto_compact_window: AutoCompactWindow::new_with_ids(auto_compact_window_ids),
+            reasoning_effort_pin: ReasoningEffortPin::Unset,
             startup_prewarm: None,
             shell_snapshot_prewarm: None,
             current_time_reminder: CurrentTimeReminderState::default(),
@@ -137,10 +183,11 @@ impl SessionState {
         items: Vec<ResponseItem>,
         reference_context_item: Option<TurnContextItem>,
     ) {
-        self.history.replace(items);
-        self.history
-            .set_reference_context_item(reference_context_item);
-        self.auto_compact_window.clear_prefill();
+        self.replace_annotated_history(
+            items.into_iter().map(ResponseItemEnvelope::new).collect(),
+            reference_context_item,
+            HistoryReplacement::Reset,
+        );
     }
 
     pub(crate) fn replace_annotated_history(
@@ -149,9 +196,19 @@ impl SessionState {
         reference_context_item: Option<TurnContextItem>,
         replacement: HistoryReplacement,
     ) {
-        match replacement {
-            HistoryReplacement::Compaction => self.history.replace_compacted(items),
-            HistoryReplacement::Reset => self.history.replace_annotated(items),
+        let invalidate_reviews = match replacement {
+            HistoryReplacement::Compaction {
+                reviewer_compaction_hash,
+            } => self
+                .history
+                .replace_compacted(items, reviewer_compaction_hash.as_deref()),
+            HistoryReplacement::Reset => {
+                self.history.replace_annotated(items);
+                true
+            }
+        };
+        if invalidate_reviews {
+            std::mem::take(&mut self.history_reset).cancel();
         }
         self.history
             .set_reference_context_item(reference_context_item);

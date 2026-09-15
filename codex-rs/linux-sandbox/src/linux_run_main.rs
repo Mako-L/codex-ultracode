@@ -22,12 +22,14 @@ use std::time::Duration;
 
 use crate::bwrap::BwrapNetworkMode;
 use crate::bwrap::BwrapOptions;
+use crate::bwrap::WSL_INTEROP_DIR;
 use crate::bwrap::create_bwrap_command_args;
 use crate::landlock::apply_permission_profile_to_current_thread;
 use crate::launcher::exec_bwrap;
 use crate::launcher::preferred_bwrap_supports_argv0;
 use crate::proxy_routing::activate_proxy_routes_in_netns;
 use crate::proxy_routing::prepare_host_proxy_route_spec;
+use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::FileSystemAccessMode;
@@ -122,13 +124,13 @@ pub struct LandlockCommand {
     #[arg(long = "apply-seccomp-then-exec", hide = true, default_value_t = false)]
     pub apply_seccomp_then_exec: bool,
 
-    /// Internal compatibility flag.
-    ///
-    /// By default, restricted-network sandboxing uses isolated networking.
-    /// If set, sandbox setup switches to proxy-only network mode with
-    /// managed routing bridges.
-    #[arg(long = "allow-network-for-proxy", hide = true, default_value_t = false)]
-    pub allow_network_for_proxy: bool,
+    /// Effective managed-network policy prepared for this command launch.
+    #[arg(
+        long,
+        hide = true,
+        value_parser = parse_managed_network
+    )]
+    pub managed_network: Option<ManagedNetworkSandboxContext>,
 
     /// Internal route spec used for managed proxy routing in bwrap mode.
     #[arg(long = "proxy-route-spec", hide = true)]
@@ -163,12 +165,13 @@ pub fn run_main() -> ! {
         permission_profile,
         use_legacy_landlock,
         apply_seccomp_then_exec,
-        allow_network_for_proxy,
+        managed_network,
         proxy_route_spec,
         verify_fd_mounts,
         no_proc,
         command,
     } = LandlockCommand::parse();
+    let allow_network_for_proxy = managed_network.is_some();
 
     if command.is_empty() {
         panic!("No command specified to execute.");
@@ -186,7 +189,9 @@ pub fn run_main() -> ! {
         use_legacy_landlock,
         &file_system_sandbox_policy,
         network_sandbox_policy,
+        allow_network_for_proxy,
         &sandbox_policy_cwd,
+        Path::new(WSL_INTEROP_DIR),
     );
 
     // Inner stage: apply seccomp/no_new_privs after bubblewrap has already
@@ -233,7 +238,7 @@ pub fn run_main() -> ! {
             &permission_profile,
             &sandbox_policy_cwd,
             /*apply_landlock_fs*/ false,
-            allow_network_for_proxy,
+            managed_network.as_ref(),
             proxy_routing_active,
         ) {
             panic!("error applying Linux sandbox restrictions: {e:?}");
@@ -279,8 +284,8 @@ pub fn run_main() -> ! {
             &permission_profile,
             &sandbox_policy_cwd,
             /*apply_landlock_fs*/ false,
-            allow_network_for_proxy,
-            /*proxy_routed_network*/ false,
+            managed_network.as_ref(),
+            /*proxy_routing_active*/ false,
         ) {
             panic!("error applying Linux sandbox restrictions: {e:?}");
         }
@@ -302,7 +307,7 @@ pub fn run_main() -> ! {
             sandbox_policy_cwd: &sandbox_policy_cwd,
             command_cwd: command_cwd.as_deref(),
             permission_profile: &permission_profile,
-            allow_network_for_proxy,
+            managed_network,
             proxy_route_spec,
             command,
         });
@@ -322,8 +327,8 @@ pub fn run_main() -> ! {
         &permission_profile,
         &sandbox_policy_cwd,
         /*apply_landlock_fs*/ true,
-        allow_network_for_proxy,
-        /*proxy_routed_network*/ false,
+        managed_network.as_ref(),
+        /*proxy_routing_active*/ false,
     ) {
         panic!("error applying legacy Linux sandbox restrictions: {e:?}");
     }
@@ -354,6 +359,11 @@ fn parse_permission_profile(value: &str) -> std::result::Result<PermissionProfil
     serde_json::from_str(value).map_err(|err| format!("invalid permission profile JSON: {err}"))
 }
 
+fn parse_managed_network(value: &str) -> std::result::Result<ManagedNetworkSandboxContext, String> {
+    serde_json::from_str(value)
+        .map_err(|err| format!("invalid managed network context JSON: {err}"))
+}
+
 fn resolve_permission_profile(
     permission_profile: Option<PermissionProfile>,
 ) -> Result<EffectivePermissions, ResolvePermissionProfileError> {
@@ -378,7 +388,9 @@ fn ensure_legacy_landlock_mode_supports_policy(
     use_legacy_landlock: bool,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
+    allow_network_for_proxy: bool,
     sandbox_policy_cwd: &Path,
+    wsl_interop_dir: &Path,
 ) {
     if use_legacy_landlock
         && file_system_sandbox_policy
@@ -386,6 +398,18 @@ fn ensure_legacy_landlock_mode_supports_policy(
     {
         panic!(
             "permission profiles requiring direct runtime enforcement are incompatible with --use-legacy-landlock"
+        );
+    }
+    if use_legacy_landlock
+        && network_sandbox_policy.is_enabled()
+        && !allow_network_for_proxy
+        && !file_system_sandbox_policy.has_full_disk_write_access()
+        // Interop can use another binfmt handler or a newly created socket.
+        // An active endpoint probe would race with sandboxed command startup.
+        && wsl_interop_dir.is_dir()
+    {
+        panic!(
+            "legacy Landlock cannot isolate WSL Windows interop with network access enabled; use bubblewrap or restrict network access"
         );
     }
 }
@@ -414,6 +438,8 @@ fn run_bwrap_with_proc_fallback(
     let options = BwrapOptions {
         mount_proc,
         network_mode,
+        mask_wsl_interop: !file_system_sandbox_policy.has_full_disk_write_access()
+            && Path::new(WSL_INTEROP_DIR).is_dir(),
         ..Default::default()
     };
     let mut bwrap_args = build_bwrap_argv(
@@ -1502,7 +1528,7 @@ struct InnerSeccompCommandArgs<'a> {
     sandbox_policy_cwd: &'a Path,
     command_cwd: Option<&'a Path>,
     permission_profile: &'a PermissionProfile,
-    allow_network_for_proxy: bool,
+    managed_network: Option<ManagedNetworkSandboxContext>,
     proxy_route_spec: Option<String>,
     command: Vec<String>,
 }
@@ -1513,7 +1539,7 @@ fn build_inner_seccomp_command(args: InnerSeccompCommandArgs<'_>) -> Vec<String>
         sandbox_policy_cwd,
         command_cwd,
         permission_profile,
-        allow_network_for_proxy,
+        managed_network,
         proxy_route_spec,
         command,
     } = args;
@@ -1540,8 +1566,12 @@ fn build_inner_seccomp_command(args: InnerSeccompCommandArgs<'_>) -> Vec<String>
         permission_profile_json,
         "--apply-seccomp-then-exec".to_string(),
     ]);
-    if allow_network_for_proxy {
-        inner.push("--allow-network-for-proxy".to_string());
+    if let Some(managed_network) = managed_network {
+        inner.push("--managed-network".to_string());
+        inner.push(
+            serde_json::to_string(&managed_network)
+                .unwrap_or_else(|err| panic!("failed to serialize managed network context: {err}")),
+        );
         let proxy_route_spec = proxy_route_spec
             .unwrap_or_else(|| panic!("managed proxy mode requires a proxy route spec"));
         inner.push("--proxy-route-spec".to_string());

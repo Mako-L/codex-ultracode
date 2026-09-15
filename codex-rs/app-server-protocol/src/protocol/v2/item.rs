@@ -287,6 +287,10 @@ pub enum ThreadItem {
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     CommandExecution {
+        #[serde(skip)]
+        #[schemars(skip)]
+        #[ts(skip)]
+        model_context: Option<codex_protocol::items::ModelInvocationContext>,
         id: String,
         /// Trusted first-party plugin id when this command resolves to one plugin script.
         #[serde(default)]
@@ -579,7 +583,7 @@ impl From<GuardianCommandSource> for CoreGuardianCommandSource {
 pub struct GuardianCommandReviewAction {
     pub source: GuardianCommandSource,
     pub command: String,
-    pub cwd: AbsolutePathBuf,
+    pub cwd: LegacyAppPathString,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -596,8 +600,8 @@ pub struct GuardianExecveReviewAction {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct GuardianApplyPatchReviewAction {
-    pub cwd: AbsolutePathBuf,
-    pub files: Vec<AbsolutePathBuf>,
+    pub cwd: LegacyAppPathString,
+    pub files: Vec<LegacyAppPathString>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -639,7 +643,7 @@ pub enum GuardianApprovalReviewAction {
     Command {
         source: GuardianCommandSource,
         command: String,
-        cwd: AbsolutePathBuf,
+        cwd: LegacyAppPathString,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -661,8 +665,8 @@ pub enum GuardianApprovalReviewAction {
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     ApplyPatch {
-        cwd: AbsolutePathBuf,
-        files: Vec<AbsolutePathBuf>,
+        cwd: LegacyAppPathString,
+        files: Vec<LegacyAppPathString>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -910,6 +914,7 @@ impl From<CoreTurnItem> for ThreadItem {
                 );
                 ThreadItem::CommandExecution {
                     id: command.id,
+                    model_context: command.model_context,
                     plugin_id: command.plugin_id,
                     script_path: command.script_path,
                     command: presentation.command,
@@ -994,6 +999,7 @@ impl From<CoreTurnItem> for ThreadItem {
                     failure: None,
                     saved_path: image.saved_path,
                     imagegen_request_id: None,
+                    generation_id: None,
                 })
             }
             CoreTurnItem::EnteredReviewMode(review) => ThreadItem::EnteredReviewMode {

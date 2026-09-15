@@ -9,7 +9,7 @@ mod operations;
 mod platform;
 mod status;
 mod trust;
-mod workflow_worktree;
+mod worktree;
 
 /// Git configuration that rejects implicitly discovered bare repositories while
 /// preserving repositories selected explicitly through `GIT_DIR` or `--git-dir`.
@@ -48,8 +48,10 @@ pub use info::get_head_commit_hash;
 pub use info::git_diff_to_remote;
 pub use info::local_git_branches;
 pub use info::recent_commits;
+pub use operations::git_config_override_env;
 pub use platform::create_symlink;
 pub use status::get_has_changes_in_repo;
 pub use trust::resolve_root_git_project_for_trust;
-pub use workflow_worktree::workflow_worktree_base;
-pub use workflow_worktree::workflow_worktree_base_with;
+pub use worktree::RepositoryIdentity;
+pub use worktree::linked_worktree_cwds;
+pub use worktree::repository_identity;
