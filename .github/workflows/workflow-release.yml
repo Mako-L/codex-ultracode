@@ -5,7 +5,7 @@ on:
     inputs:
       tag:
         description: Existing release tag to attach packages to
-        default: v0.153.4-workflow.1
+        default: v0.155.0-workflow.1
 
 permissions:
   contents: write
@@ -28,4 +28,4 @@ jobs:
         env:
           PATH: /usr/local/bin:/Users/mako/.orbstack/bin:/opt/homebrew/bin:/usr/bin:/bin
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash scripts/release-host-packages.sh "${{ github.event.inputs.tag || 'v0.153.4-workflow.1' }}"
+        run: bash scripts/release-host-packages.sh "${{ github.event.inputs.tag || 'v0.155.0-workflow.1' }}"

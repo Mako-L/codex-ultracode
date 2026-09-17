@@ -67,7 +67,7 @@ impl Fixture {
             ],
         )?;
         MockResponsesConfig::new("http://127.0.0.1:1")
-            .with_root_config("worktree_base_ref = \"head\"")
+            .with_root_config("[worktree]\nbase_ref = \"head\"")
             .with_extra_config("[permissions.partial.filesystem]\n\"/\" = \"read\"\n\":project_roots\" = { src = \"write\" }")
             .write(home.path())?;
         let mut server = TestAppServer::builder()
@@ -331,13 +331,13 @@ async fn accepted_checkout_grant_stays_bounded_and_does_not_modify_parent_author
     let profile: PermissionProfile = serde_json::from_value(record["permission_profile"].clone())?;
     let policy = profile.file_system_sandbox_policy();
     let checkout = Path::new(&prepared.cwd);
-    assert!(policy.can_write_path_with_cwd(checkout.join("src/result").as_path(), checkout));
-    assert!(!policy.can_write_path_with_cwd(checkout.join("outside-src").as_path(), checkout));
+    assert!(policy.can_write_local_path_with_cwd(checkout.join("src/result").as_path(), checkout));
+    assert!(!policy.can_write_local_path_with_cwd(checkout.join("outside-src").as_path(), checkout));
     for name in [".git", ".codex/fixture.txt", ".agents/fixture.txt"] {
         assert!(checkout.join(name).is_file());
-        assert!(!policy.can_write_path_with_cwd(checkout.join(name).as_path(), checkout));
+        assert!(!policy.can_write_local_path_with_cwd(checkout.join(name).as_path(), checkout));
     }
-    assert!(!policy.can_write_path_with_cwd(
+    assert!(!policy.can_write_local_path_with_cwd(
         fixture.project.path().join(".git/config").as_path(),
         checkout
     ));

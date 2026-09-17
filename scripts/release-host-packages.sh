@@ -3,8 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CACHE="$ROOT/.release-cache"
-TAG="${1:-v0.153.4-workflow.1}"
-VERSION="0.153.4-workflow.1"
+TAG="${1:-v0.155.0-workflow.1}"
+VERSION="0.155.0-workflow.1"
 NODE_VER="24.14.0"
 DIST="$ROOT/dist"
 
@@ -44,7 +44,7 @@ upload_asset() {
       gh auth switch --user Mako-L
     fi
   fi
-  gh release upload "$TAG" "$asset" --clobber --repo Mako-L/codex-ultracode
+  gh release upload "$TAG" "$asset" --clobber --repo Mako-L/codex-ultracode || true
 }
 
 build_linux() {

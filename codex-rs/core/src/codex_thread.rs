@@ -816,13 +816,13 @@ impl CodexThread {
         let turn = self.session.new_default_turn().await;
         let request = crate::guardian::GuardianApprovalRequest::ApplyPatch {
             id: crate::guardian::new_guardian_review_id(),
-            cwd,
-            files: vec![file],
+            cwd: cwd.into(),
+            files: vec![file.into()],
             patch,
         };
         matches!(
-            crate::guardian::review_approval_request(
-                &self.session,
+            crate::guardian::decide_approval(
+                Arc::clone(&self.session),
                 turn,
                 crate::guardian::new_guardian_review_id(),
                 request,
@@ -830,10 +830,18 @@ impl CodexThread {
                     approval: Some("Save a completed dynamic workflow".to_string()),
                     retry: None,
                 },
+                crate::guardian::GuardianReviewOptions {
+                    require_guardian: true,
+                    plugin_attribution_override: None,
+                    approval_request_source:
+                        codex_analytics::GuardianApprovalRequestSource::MainTurn,
+                    external_cancel: None,
+                    require_synchronous_review: false,
+                },
             )
             .await,
-            codex_protocol::protocol::ReviewDecision::Approved
-                | codex_protocol::protocol::ReviewDecision::ApprovedForSession
+            Some(codex_protocol::protocol::ReviewDecision::Approved)
+                | Some(codex_protocol::protocol::ReviewDecision::ApprovedForSession)
         )
     }
 

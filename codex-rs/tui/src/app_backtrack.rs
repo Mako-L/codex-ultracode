@@ -116,6 +116,12 @@ impl App {
             if let Some(action) = action {
                 if action == crate::workflow_view::WorkflowAction::Close {
                     self.close_transcript_overlay(tui);
+                } else if let crate::workflow_view::WorkflowAction::SetEffort { effort } = &action {
+                    if let Err(error) = self.apply_workflow_effort(app_server, effort).await {
+                        self.chat_widget.add_error_message(error.to_string());
+                    } else {
+                        self.close_transcript_overlay(tui);
+                    }
                 } else if let Some(bridge) = bridge
                     && let Err(error) =
                         Box::pin(self.handle_workflow_action(tui, app_server, &bridge, action))
@@ -246,6 +252,7 @@ impl App {
                 self.apply_workflow_effort(app_server, &effort)
                     .await
                     .map_err(|error| error.to_string())?;
+                self.close_transcript_overlay(tui);
                 return Ok(());
             }
             WorkflowAction::Save {

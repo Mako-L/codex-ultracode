@@ -167,12 +167,13 @@ async fn wait_for_backfill_gate(
             return Ok(());
         }
         if wait_started.elapsed() >= STARTUP_BACKFILL_WAIT_TIMEOUT {
-            return Err(anyhow::anyhow!(
-                "timed out waiting for state db backfill at {} after {:?} (status: {})",
+            emit_startup_warning(&format!(
+                "continuing startup while state db backfill is {} at {} after {:?}",
+                backfill_state.status.as_str(),
                 codex_home.display(),
                 STARTUP_BACKFILL_WAIT_TIMEOUT,
-                backfill_state.status.as_str()
             ));
+            return Ok(());
         }
 
         let message = format!(

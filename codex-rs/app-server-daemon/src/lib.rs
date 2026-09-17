@@ -1245,6 +1245,8 @@ mod tests {
         std::fs::create_dir_all(&legacy).expect("legacy selection");
         let daemon = Daemon {
             socket_path: home.path().join("server.sock"),
+            backend_socket_path: None,
+            backend_codex_home: None,
             pid_file: state.join(super::LEGACY_PID_FILE_NAME),
             update_pid_file: state.join(super::LEGACY_UPDATE_PID_FILE_NAME),
             operation_lock_file: state.join("daemon.lock"),
@@ -1278,6 +1280,8 @@ mod tests {
         let state = temp.path().join("missing-home").join("daemon-state");
         let daemon = Daemon {
             socket_path: state.join("server.sock"),
+            backend_socket_path: None,
+            backend_codex_home: None,
             pid_file: state.join("server.pid"),
             update_pid_file: state.join("updater.pid"),
             operation_lock_file: state.join("daemon.lock"),
@@ -1303,6 +1307,8 @@ mod tests {
             .expect("private state directory");
         let daemon = Daemon {
             socket_path: home.path().join("server.sock"),
+            backend_socket_path: None,
+            backend_codex_home: None,
             pid_file: state.join("server.pid"),
             update_pid_file: state.join("updater.pid"),
             operation_lock_file: state.join("daemon.lock"),
@@ -1359,6 +1365,8 @@ mod tests {
             socket_path: home
                 .path()
                 .join("app-server-control/app-server-control.sock"),
+            backend_socket_path: None,
+            backend_codex_home: None,
             pid_file: state.join("app-server.pid"),
             update_pid_file: state.join("app-server-updater.pid"),
             operation_lock_file: state.join("daemon.lock"),

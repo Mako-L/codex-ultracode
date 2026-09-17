@@ -3535,3 +3535,44 @@ async fn compact_queues_user_messages_snapshot() {
         normalize_snapshot_paths(term.backend().vt100().screen().contents())
     );
 }
+
+#[tokio::test]
+async fn slash_workflows_opens_native_workflow_view() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.dispatch_command(SlashCommand::Workflows);
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::Workflow(crate::app_event::WorkflowEvent::Open { effort: None }))
+    );
+}
+
+#[tokio::test]
+async fn slash_effort_opens_native_workflow_effort_picker() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.dispatch_command(SlashCommand::Effort);
+    match rx.try_recv() {
+        Ok(AppEvent::Workflow(crate::app_event::WorkflowEvent::Open { effort: Some(value) })) => {
+            assert_eq!(value, "");
+        }
+        other => panic!("unexpected event: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn slash_workflows_and_effort_are_blocked_when_disabled() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.disable_workflows = true;
+    chat.dispatch_command(SlashCommand::Workflows);
+    chat.dispatch_command(SlashCommand::Effort);
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Workflows are disabled by configuration."),
+        "expected disable error, got {rendered:?}"
+    );
+    assert!(!cells.is_empty());
+}

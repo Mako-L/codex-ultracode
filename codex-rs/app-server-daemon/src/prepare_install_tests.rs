@@ -13,6 +13,8 @@ fn daemon(home: &std::path::Path) -> crate::Daemon {
     let state = home.join("app-server-daemon");
     crate::Daemon {
         socket_path: state.join("app-server.sock"),
+        backend_socket_path: None,
+        backend_codex_home: None,
         pid_file: state.join("app-server.pid"),
         update_pid_file: state.join("app-server-updater.pid"),
         operation_lock_file: state.join("daemon.lock"),

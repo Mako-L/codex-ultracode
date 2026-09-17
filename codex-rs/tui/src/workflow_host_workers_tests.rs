@@ -13,6 +13,17 @@ fn install_fixture_node(root: &Path) {
     assert!(output.status.success());
     let source = PathBuf::from(String::from_utf8(output.stdout).unwrap().trim());
     let target = root.join(if cfg!(windows) { "node.exe" } else { "node" });
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+        let escaped = source.to_string_lossy().replace('\'', "'\\''");
+        let mut file = std::fs::File::create(&target).unwrap();
+        writeln!(file, "#!/bin/sh\nexec '{escaped}' \"$@\"").unwrap();
+        drop(file);
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    #[cfg(windows)]
     if std::fs::hard_link(&source, &target).is_err() {
         std::fs::copy(source, target).unwrap();
     }

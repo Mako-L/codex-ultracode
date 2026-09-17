@@ -2703,9 +2703,23 @@ async fn underfilled_scrollback_fetches_older_pages_without_opening_the_transcri
     Ok(())
 }
 
-#[tokio::test]
-async fn paginated_workflows_never_request_full_thread_history() -> Result<()> {
-    // Keep this multi-stage lifecycle's large child futures off the test thread stack.
+#[test]
+fn paginated_workflows_never_request_full_thread_history() -> Result<()> {
+    const TEST_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
+    std::thread::Builder::new()
+        .name("tui-paginated-workflows".to_string())
+        .stack_size(TEST_STACK_SIZE_BYTES)
+        .spawn(|| {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            runtime.block_on(paginated_workflows_never_request_full_thread_history_async())
+        })?
+        .join()
+        .expect("paginated workflows test thread")
+}
+
+async fn paginated_workflows_never_request_full_thread_history_async() -> Result<()> {
     let (app, _codex_home) = Box::pin(make_history_test_app()).await?;
     let paginated_thread_id = create_history_rollout(
         &app.config,

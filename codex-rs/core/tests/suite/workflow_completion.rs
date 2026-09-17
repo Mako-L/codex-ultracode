@@ -2,7 +2,6 @@ use codex_core::TurnInput;
 use codex_core::TurnInputRequest;
 use codex_core::TurnInputSubmission;
 use codex_history::RolloutItem;
-use codex_history::RolloutLine;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::user_input::UserInput;
@@ -124,7 +123,7 @@ async fn native_workflow_completion_reaches_model_and_persists_typed_marker(acti
     let rollout = tokio::fs::read_to_string(original_path).await.unwrap();
     let typed = rollout
         .lines()
-        .filter_map(|line| serde_json::from_str::<RolloutLine>(line).ok())
+        .filter_map(|line| codex_rollout::parse_rollout_line(line).ok())
         .filter_map(|line| match line.item {
             RolloutItem::ResponseItem(item) => match item.item {
                 ResponseItem::Message {

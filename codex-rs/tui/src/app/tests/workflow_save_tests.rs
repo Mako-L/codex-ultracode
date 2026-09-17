@@ -4,7 +4,7 @@ use codex_app_server_protocol::WorkflowSaveResponse;
 
 #[cfg(unix)]
 #[tokio::test]
-async fn workflow_save_returns_before_pending_approval_and_closes_overlay() -> Result<()> {
+async fn workflow_save_writes_without_a_second_file_approval() -> Result<()> {
     use std::collections::HashMap;
     use std::collections::HashSet;
     use std::time::Duration;
@@ -20,10 +20,9 @@ async fn workflow_save_returns_before_pending_approval_and_closes_overlay() -> R
         .set_permission_profile(PermissionProfile::read_only())?;
     app.chat_widget
         .set_approval_policy(AskForApproval::OnRequest);
-    app.chat_widget
-        .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::legacy(
-            PermissionProfile::read_only(),
-        ));
+    let _ = app.chat_widget.set_permission_profile_from_session_snapshot(
+        PermissionProfileSnapshot::legacy(PermissionProfile::read_only()),
+    );
 
     let temp = tempdir()?;
     // Match a resolved workspace root; macOS temporary paths can traverse /var.
@@ -107,40 +106,26 @@ for await(const line of readline.createInterface({input:process.stdin})){const r
     .await??;
     assert!(app.overlay.is_none());
 
-    let approval = tokio::time::timeout(Duration::from_secs(5), async {
+    let completion = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             tokio::select! {
                 event = app_server.next_event() => {
                     if let Some(codex_app_server_client::AppServerEvent::ServerRequest(request)) = event
                         && matches!(request.as_ref(), codex_app_server_protocol::ServerRequest::FileChangeRequestApproval { .. })
                     {
-                        break request;
+                        panic!("workflow save requested a second file approval");
                     }
                 }
                 event = events.recv() => {
-                    if let Some(AppEvent::Workflow(WorkflowEvent::SaveCompleted { result, .. })) = event {
-                        panic!("Save completed before approval was observed: {result:?}");
+                    if let Some(event) = event
+                        && matches!(
+                            event,
+                            AppEvent::Workflow(WorkflowEvent::SaveCompleted { .. })
+                        )
+                    {
+                        break event;
                     }
                 }
-            }
-        }
-    })
-    .await?;
-    app_server
-        .resolve_server_request(
-            approval.id().clone(),
-            serde_json::json!({"decision":"accept"}),
-        )
-        .await?;
-    let completion = tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            if let Some(event) = events.recv().await
-                && matches!(
-                    event,
-                    AppEvent::Workflow(WorkflowEvent::SaveCompleted { .. })
-                )
-            {
-                break event;
             }
         }
     })

@@ -10,6 +10,7 @@ mod platform;
 mod status;
 mod trust;
 mod worktree;
+mod workflow_worktree;
 
 /// Git configuration that rejects implicitly discovered bare repositories while
 /// preserving repositories selected explicitly through `GIT_DIR` or `--git-dir`.
@@ -30,6 +31,7 @@ pub use baseline::reset_git_repository;
 pub use branch::merge_base_with_head;
 pub use codex_protocol::SanitizedGitUrl;
 pub use codex_protocol::protocol::GitSha;
+pub use git_process::git_program;
 pub use errors::GitToolingError;
 pub use fsmonitor::FsmonitorOverride;
 pub use fsmonitor::FsmonitorProbeRunner;
@@ -55,3 +57,5 @@ pub use trust::resolve_root_git_project_for_trust;
 pub use worktree::RepositoryIdentity;
 pub use worktree::linked_worktree_cwds;
 pub use worktree::repository_identity;
+pub use workflow_worktree::workflow_worktree_base;
+pub use workflow_worktree::workflow_worktree_base_with;

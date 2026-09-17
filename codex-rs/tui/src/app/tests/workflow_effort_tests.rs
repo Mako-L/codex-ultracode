@@ -1,5 +1,10 @@
 use super::*;
 use crate::app_event::WorkflowEvent;
+use crate::pager_overlay::Overlay;
+use crate::tui::TuiEvent;
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
+use crossterm::event::KeyModifiers;
 use futures::SinkExt;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
@@ -147,6 +152,16 @@ async fn workflow_effort_updates_native_authority_and_persists_only_normal_selec
     assert!(!app.config.ultracode && !app.chat_widget.config_ref().ultracode);
     app.on_update_reasoning_effort(Some(ReasoningEffortConfig::Low));
     assert!(!app.config.ultracode);
+    app.overlay = Some(Overlay::Workflow(Box::new(
+        crate::pager_overlay::WorkflowOverlay::new(json!({"runs": []}), Some("low".into())),
+    )));
+    app.handle_backtrack_overlay_event(
+        &mut tui,
+        &mut server,
+        TuiEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+    )
+    .await?;
+    assert!(app.overlay.is_none());
     fake.abort();
     Ok(())
 }

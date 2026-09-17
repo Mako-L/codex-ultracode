@@ -23,6 +23,7 @@ fn plain_text_composer_keeps_command_prefixes_literal() {
             InputResult::Submitted {
                 text: format!("{prefix}keep this literal"),
                 text_elements: Vec::new(),
+                workflow_keyword: None,
             }
         );
     }

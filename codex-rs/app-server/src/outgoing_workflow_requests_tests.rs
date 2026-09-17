@@ -5,7 +5,7 @@ use serde_json::json;
 
 #[tokio::test]
 async fn workflow_approval_survives_parent_turn_but_not_thread_cleanup() {
-    let (tx, _rx) = mpsc::channel(8);
+    let (tx, mut rx) = mpsc::channel(8);
     let outgoing = Arc::new(OutgoingMessageSender::new(
         tx,
         AnalyticsEventsClient::disabled(),
@@ -48,4 +48,6 @@ async fn workflow_approval_survives_parent_turn_but_not_thread_cleanup() {
             .await
             .is_empty()
     );
+    drop(outgoing);
+    while rx.try_recv().is_ok() {}
 }

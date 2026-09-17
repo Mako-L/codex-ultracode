@@ -246,6 +246,7 @@ async fn queued_model_slash_prompt_clears_questions_but_local_slash_command_does
             InputResult::Queued {
                 text: text.into(),
                 text_elements: Vec::new(),
+                workflow_keyword: None,
                 action: QueuedInputAction::ParseSlash,
                 pending_pastes: Vec::new(),
             },
@@ -257,6 +258,7 @@ async fn queued_model_slash_prompt_clears_questions_but_local_slash_command_does
         InputResult::Queued {
             text: "/plan New work".into(),
             text_elements: Vec::new(),
+            workflow_keyword: None,
             action: QueuedInputAction::ParseSlash,
             pending_pastes: Vec::new(),
         },
@@ -270,6 +272,7 @@ async fn queued_model_slash_prompt_clears_questions_but_local_slash_command_does
         InputResult::Queued {
             text: "/diff explain the change".into(),
             text_elements: Vec::new(),
+            workflow_keyword: None,
             action: QueuedInputAction::ParseSlash,
             pending_pastes: Vec::new(),
         },
@@ -288,6 +291,7 @@ async fn rejected_synchronous_literal_prompt_keeps_questions() {
         InputResult::Queued {
             text: "literal prompt".into(),
             text_elements: Vec::new(),
+            workflow_keyword: None,
             action: QueuedInputAction::Literal,
             pending_pastes: Vec::new(),
         },

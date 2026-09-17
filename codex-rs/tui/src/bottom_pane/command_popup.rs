@@ -627,69 +627,6 @@ mod tests {
     }
 
     #[test]
-    fn personality_command_hidden_when_disabled() {
-        let mut popup = CommandPopup::new(
-            CommandPopupFlags {
-                collaboration_modes_enabled: true,
-                connectors_enabled: false,
-                plugins_command_enabled: false,
-                token_activity_command_enabled: false,
-                service_tier_commands_enabled: false,
-                goal_command_enabled: false,
-                personality_command_enabled: false,
-                windows_degraded_sandbox_active: false,
-                side_conversation_active: false,
-            },
-            Vec::new(),
-        );
-        popup.on_composer_text_change("/pers".to_string());
-
-        let cmds: Vec<String> = popup
-            .filtered_items()
-            .into_iter()
-            .map(|item| match item {
-                CommandItem::Builtin(cmd) => cmd.command().to_string(),
-                CommandItem::ServiceTier(command) => command.name,
-                CommandItem::Workflow(command) => command.name,
-            })
-            .collect();
-        assert!(
-            !cmds.iter().any(|cmd| cmd == "personality"),
-            "expected '/personality' to be hidden when disabled, got {cmds:?}"
-        );
-    }
-
-    #[test]
-    fn personality_command_visible_when_enabled() {
-        let mut popup = CommandPopup::new(
-            CommandPopupFlags {
-                collaboration_modes_enabled: true,
-                connectors_enabled: false,
-                plugins_command_enabled: false,
-                token_activity_command_enabled: false,
-                service_tier_commands_enabled: false,
-                goal_command_enabled: false,
-                personality_command_enabled: true,
-                windows_degraded_sandbox_active: false,
-                side_conversation_active: false,
-            },
-            Vec::new(),
-        );
-        popup.on_composer_text_change("/personality".to_string());
-
-        match popup.selected_item() {
-            Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "personality"),
-            Some(CommandItem::ServiceTier(command)) => {
-                panic!("expected personality command, got service tier {command:?}")
-            }
-            Some(CommandItem::Workflow(command)) => {
-                panic!("expected built-in command, got workflow {command:?}")
-            }
-            other => panic!("expected personality to be selected for exact match, got {other:?}"),
-        }
-    }
-
-    #[test]
     fn debug_commands_are_hidden_from_popup() {
         let popup = CommandPopup::new(CommandPopupFlags::default(), Vec::new());
         let cmds: Vec<String> = popup

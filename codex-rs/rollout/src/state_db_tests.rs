@@ -129,7 +129,7 @@ async fn try_init_waits_for_concurrent_startup_backfill() -> anyhow::Result<()> 
 }
 
 #[tokio::test]
-async fn try_init_times_out_waiting_for_stuck_startup_backfill() -> anyhow::Result<()> {
+async fn try_init_continues_when_startup_backfill_stays_incomplete() -> anyhow::Result<()> {
     let home = TempDir::new().expect("temp dir");
     let runtime = codex_state::StateRuntime::init(
         codex_state::SqliteConfig::new_for_testing(home.path().abs()),
@@ -139,23 +139,14 @@ async fn try_init_times_out_waiting_for_stuck_startup_backfill() -> anyhow::Resu
     let claimed = runtime.try_claim_backfill(/*lease_seconds*/ 60).await?;
     assert!(claimed);
 
-    let result = try_init_with_roots_and_backfill_lease(
+    let started = try_init_with_roots_and_backfill_lease(
         home.path().to_path_buf(),
         codex_state::SqliteConfig::new_for_testing(home.path().abs()),
         "test-provider".to_string(),
         /*backfill_lease_seconds*/ 60,
     )
-    .await;
-    let err = match result {
-        Ok(_) => panic!("state db init should not wait forever for incomplete backfill"),
-        Err(err) => err,
-    };
-    assert!(
-        err.to_string()
-            .contains("timed out waiting for state db backfill"),
-        "unexpected error: {err}"
-    );
-
+    .await?;
+    started.close().await;
     Ok(())
 }
 

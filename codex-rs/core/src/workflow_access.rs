@@ -54,7 +54,10 @@ impl CodexThread {
                         path.to_abs_path().ok().is_none_or(|path| {
                             !policy
                                 .file_system_sandbox_policy()
-                                .can_write_path_with_cwd(path.as_path(), snapshot.cwd().as_path())
+                                .can_write_local_path_with_cwd(
+                                    path.as_path(),
+                                    snapshot.cwd().as_path(),
+                                )
                         })
                     }
                     _ => true,
@@ -99,17 +102,20 @@ impl CodexThread {
         if snapshot.approvals_reviewer == ApprovalsReviewer::User && !strict_review {
             return Ok(Some(reason));
         }
+        let cwd = snapshot.cwd();
         let request = GuardianApprovalRequest::ExecCommand {
             id: new_guardian_review_id(),
+            environment_id: environment.selection.environment_id.clone(),
             command: command.to_vec(),
-            cwd: snapshot.cwd().clone(),
+            cwd: cwd.clone().into(),
+            guardian_cwd: codex_utils_path_uri::LegacyAppPathString::from_abs_path(cwd),
             sandbox_permissions,
             additional_permissions: Some(additional_permissions.clone()),
             justification: Some(reason.clone()),
             tty: false,
         };
-        let decision = crate::guardian::review_approval_request(
-            &self.session,
+        let decision = crate::guardian::decide_approval(
+            Arc::clone(&self.session),
             turn,
             new_guardian_review_id(),
             request,
@@ -117,10 +123,17 @@ impl CodexThread {
                 approval: Some(reason),
                 retry: None,
             },
+            crate::guardian::GuardianReviewOptions {
+                require_guardian: true,
+                plugin_attribution_override: None,
+                approval_request_source: codex_analytics::GuardianApprovalRequestSource::MainTurn,
+                external_cancel: None,
+                require_synchronous_review: false,
+            },
         )
         .await;
         match decision {
-            ReviewDecision::Approved | ReviewDecision::ApprovedForSession => Ok(None),
+            Some(ReviewDecision::Approved) | Some(ReviewDecision::ApprovedForSession) => Ok(None),
             _ => Err("workflow checkout command was not approved".into()),
         }
     }
@@ -139,18 +152,26 @@ impl CodexThread {
             permissions,
         };
         matches!(
-            crate::guardian::review_approval_request(
-                &self.session,
+            crate::guardian::decide_approval(
+                Arc::clone(&self.session),
                 turn,
                 new_guardian_review_id(),
                 request,
                 ApprovalRequestReasons {
                     approval: Some("Grant only this isolated workflow checkout".into()),
                     retry: None
-                }
+                },
+                crate::guardian::GuardianReviewOptions {
+                    require_guardian: true,
+                    plugin_attribution_override: None,
+                    approval_request_source:
+                        codex_analytics::GuardianApprovalRequestSource::MainTurn,
+                    external_cancel: None,
+                    require_synchronous_review: false,
+                },
             )
             .await,
-            ReviewDecision::Approved | ReviewDecision::ApprovedForSession
+            Some(ReviewDecision::Approved) | Some(ReviewDecision::ApprovedForSession)
         )
     }
 
@@ -177,6 +198,10 @@ impl CodexThread {
             .map_err(|error| error.to_string())?;
         let mut env = crate::exec_env::create_env(environment.shell_environment_policy(), None);
         env.insert("GIT_TERMINAL_PROMPT".into(), "0".into());
+        let mut command = command;
+        if command.first().map(String::as_str) == Some("git") {
+            command[0] = codex_git_utils::git_program();
+        }
         let output = crate::exec::process_exec_tool_call(
             ExecParams {
                 command,
@@ -198,6 +223,7 @@ impl CodexThread {
             &cwd,
             &[cwd.clone()],
             &turn.config.codex_linux_sandbox_exe,
+            &turn.config.codex_self_exe,
             turn.config.features.use_legacy_landlock(),
             None,
         )

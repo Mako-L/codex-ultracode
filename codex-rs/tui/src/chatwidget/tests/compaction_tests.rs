@@ -62,6 +62,7 @@ async fn compaction_status_survives_follow_up_and_preserves_turn_time() {
         InputResult::Submitted {
             text: "keep going".to_string(),
             text_elements: Vec::new(),
+            workflow_keyword: None,
         },
         /*had_modal_or_popup*/ false,
     );

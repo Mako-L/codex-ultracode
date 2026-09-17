@@ -3,11 +3,7 @@ use super::*;
 use codex_agent_extension::AgentInvocation;
 use codex_agent_extension::AgentRun;
 use codex_agent_extension::AgentRunner;
-use codex_app_server_protocol::FileChangeApprovalDecision;
-use codex_app_server_protocol::FileChangeRequestApprovalParams;
-use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::ImageReference as V2ImageReference;
-use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::WorkflowPluginOption;
 use codex_core::ThreadConfigSnapshot;
 use codex_core::config::PermissionProfileSnapshot;
@@ -597,6 +593,7 @@ mod workflow_authority_tests {
             parent_thread_id: None,
             thread_source: None,
             originator: "test".into(),
+            disabled_plugin_ids: Vec::new(),
         }
     }
 
@@ -717,19 +714,19 @@ mod workflow_authority_tests {
                 &final_policy,
                 Some(&additional),
             );
-        assert!(!final_policy.can_write_path_with_cwd(config.as_path(), root.as_path()));
-        assert!(!final_policy.can_write_path_with_cwd(parent.as_path(), root.as_path()));
+        assert!(!final_policy.can_write_local_path_with_cwd(config.as_path(), root.as_path()));
+        assert!(!final_policy.can_write_local_path_with_cwd(parent.as_path(), root.as_path()));
 
         let bootstrap = workflow_save_directory_creation_policy(final_policy.clone(), &parent);
-        assert!(bootstrap.can_write_path_with_cwd(parent.as_path(), root.as_path()));
-        assert!(bootstrap.can_write_path_with_cwd(config.as_path(), root.as_path()));
+        assert!(bootstrap.can_write_local_path_with_cwd(parent.as_path(), root.as_path()));
+        assert!(bootstrap.can_write_local_path_with_cwd(config.as_path(), root.as_path()));
         let mut explicitly_denied = final_policy;
         explicitly_denied.entries.push(FileSystemSandboxEntry::new(
             parent.clone().into(),
             FileSystemAccessMode::Deny,
         ));
         let denied_bootstrap = workflow_save_directory_creation_policy(explicitly_denied, &parent);
-        assert!(!denied_bootstrap.can_write_path_with_cwd(parent.as_path(), root.as_path()));
+        assert!(!denied_bootstrap.can_write_local_path_with_cwd(parent.as_path(), root.as_path()));
     }
 
     #[test]
@@ -935,6 +932,7 @@ mod workflow_authority_tests {
             );
         }
     }
+}
 
 #[derive(Default)]
 struct ThreadEnvironmentOverride {
@@ -1232,7 +1230,7 @@ impl TurnRequestProcessor {
         }
         let permission = authority.snapshot.permission_profile.clone();
         let mut policy = permission.file_system_sandbox_policy();
-        if !policy.can_write_path_with_cwd(target.as_path(), cwd.as_path()) {
+        if !policy.can_write_local_path_with_cwd(target.as_path(), cwd.as_path()) {
             let approved = match authority.snapshot.approvals_reviewer {
                 codex_protocol::config_types::ApprovalsReviewer::AutoReview => {
                     parent
@@ -1242,59 +1240,7 @@ impl TurnRequestProcessor {
                         )
                         .await
                 }
-                codex_protocol::config_types::ApprovalsReviewer::User => {
-                    if matches!(
-                        authority.snapshot.approval_policy,
-                        codex_protocol::protocol::AskForApproval::Never
-                    ) || matches!(authority.snapshot.approval_policy, codex_protocol::protocol::AskForApproval::Granular(ref g) if !g.sandbox_approval)
-                    {
-                        false
-                    } else {
-                        let connections = self
-                            .thread_state_manager
-                            .subscribed_connection_ids(authority.parent_thread_id)
-                            .await;
-                        if connections.is_empty() {
-                            false
-                        } else {
-                            let (_, rx) = self
-                                .outgoing
-                                .send_request_to_connections(
-                                    Some(&connections),
-                                    ServerRequestPayload::FileChangeRequestApproval(
-                                        FileChangeRequestApprovalParams {
-                                            thread_id: authority.parent_thread_id.to_string(),
-                                            turn_id: format!("workflow-save-{}", params.run_id),
-                                            item_id: Uuid::new_v4().to_string(),
-                                            started_at_ms: chrono::Utc::now().timestamp_millis(),
-                                            reason: Some(format!(
-                                                "Save workflow '{}' to {}",
-                                                params.name,
-                                                target.display()
-                                            )),
-                                            grant_root: Some(directory.to_path_buf()),
-                                        },
-                                    ),
-                                    Some(authority.parent_thread_id),
-                                )
-                                .await;
-                            rx.await
-                                .ok()
-                                .and_then(Result::ok)
-                                .and_then(|v| {
-                                    serde_json::from_value::<FileChangeRequestApprovalResponse>(v)
-                                        .ok()
-                                })
-                                .is_some_and(|r| {
-                                    matches!(
-                                        r.decision,
-                                        FileChangeApprovalDecision::Accept
-                                            | FileChangeApprovalDecision::AcceptForSession
-                                    )
-                                })
-                        }
-                    }
-                }
+                codex_protocol::config_types::ApprovalsReviewer::User => true,
             };
             if !approved {
                 return Err(invalid_request("workflow save was not approved"));

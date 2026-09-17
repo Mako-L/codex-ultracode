@@ -45,6 +45,7 @@ fn paste_burst_tabs_preserve_multiline_draft() {
                 InputResult::Queued {
                     text: payload.trim().to_string(),
                     text_elements: Vec::new(),
+                    workflow_keyword: None,
                     action: QueuedInputAction::Plain,
                     pending_pastes: Vec::new(),
                 }
@@ -52,6 +53,7 @@ fn paste_burst_tabs_preserve_multiline_draft() {
                 InputResult::Submitted {
                     text: payload.trim().to_string(),
                     text_elements: Vec::new(),
+                    workflow_keyword: None,
                 }
             };
             assert_eq!(result, expected);
@@ -119,6 +121,7 @@ fn paste_burst_expired_before_tab_still_queues() {
         InputResult::Queued {
             text: "x".to_string(),
             text_elements: Vec::new(),
+            workflow_keyword: None,
             action: QueuedInputAction::Plain,
             pending_pastes: Vec::new(),
         }
@@ -140,6 +143,7 @@ fn paste_burst_modified_queue_binding_still_dispatches() {
         InputResult::Queued {
             text: "x".to_string(),
             text_elements: Vec::new(),
+            workflow_keyword: None,
             action: QueuedInputAction::Plain,
             pending_pastes: Vec::new(),
         }

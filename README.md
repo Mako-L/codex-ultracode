@@ -3,7 +3,7 @@
   <img src=".github/workflow-running.png" alt="A native workflow running in Codex Ultracode" width="90%" />
 </p>
 
-This tree is based on Codex `0.153.4`. It is not official OpenAI Codex and is not kept on current `openai/codex` main. Use [GitHub Releases](https://github.com/Mako-L/codex-ultracode/releases) from this repo. Do not install `@openai/codex` or the ChatGPT installer if you want this fork.
+This tree is based on current `openai/codex` main (`872fc22`, 2026-09-15), past `rust-v0.155.0-alpha.8`, plus the native workflow engine. It is not official OpenAI Codex. Use [GitHub Releases](https://github.com/Mako-L/codex-ultracode/releases) from this repo. Do not install `@openai/codex` or the ChatGPT installer if you want this fork.
 
 ## Install
 
@@ -65,7 +65,7 @@ Linux packages are built on this Mac with OrbStack, not GitHub-hosted runners:
 
 ```shell
 export CODEX_REPO_ROOT="$PWD"
-bash scripts/release-host-packages.sh v0.153.4-workflow.1
+bash scripts/release-host-packages.sh v0.155.0-workflow.1
 ```
 
 See [Installing & building](./docs/install.md) for the Rust toolchain.

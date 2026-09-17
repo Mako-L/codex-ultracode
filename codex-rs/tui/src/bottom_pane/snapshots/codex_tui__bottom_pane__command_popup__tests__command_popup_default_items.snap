@@ -1,5 +1,6 @@
 ---
 source: tui/src/bottom_pane/command_popup.rs
+assertion_line: 499
 expression: commands
 ---
 /model - choose what model and reasoning effort to use
@@ -24,8 +25,8 @@ expression: commands
 /init - create an AGENTS.md file with instructions for Codex
 /compact - summarize conversation to prevent hitting the context limit
 /recap - summarize the current conversation now
-/workflows - view and control Ultracode workflows
-/effort - configure Ultracode workflow effort
+/workflows - view and control native workflows
+/effort - configure workflow effort
 /config - configure dynamic workflow size
 /agents - view and switch between all active agent sessions
 /side - start a side conversation in an ephemeral fork

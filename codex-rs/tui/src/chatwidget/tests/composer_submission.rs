@@ -1360,6 +1360,7 @@ async fn queued_restore_with_remote_images_keeps_local_placeholder_mapping() {
         local_images: local_images.clone(),
         remote_image_urls: remote_image_urls.clone(),
         text_elements: text_elements.clone(),
+        workflow_keyword: None,
         mention_bindings: Vec::new(),
     });
 
@@ -1399,6 +1400,7 @@ async fn restored_message_preserves_existing_composer_draft_and_attachments() {
             (0.."[Image #1]".len()).into(),
             Some("[Image #1]".to_string()),
         )],
+        workflow_keyword: None,
         mention_bindings: Vec::new(),
     });
 
@@ -1436,6 +1438,7 @@ async fn interrupted_turn_restore_keeps_active_mode_for_resubmission() {
             local_images: Vec::new(),
             remote_image_urls: Vec::new(),
             text_elements: Vec::new(),
+            workflow_keyword: None,
             mention_bindings: Vec::new(),
         }
         .into(),
@@ -1492,6 +1495,7 @@ async fn remap_placeholders_uses_attachment_labels() {
     let message = UserMessage {
         text,
         text_elements: elements,
+        workflow_keyword: None,
         local_images: attachments,
         remote_image_urls: vec!["https://example.com/a.png".to_string()],
         mention_bindings: Vec::new(),
@@ -1558,6 +1562,7 @@ async fn remap_placeholders_uses_byte_ranges_when_placeholder_missing() {
     let message = UserMessage {
         text,
         text_elements: elements,
+        workflow_keyword: None,
         local_images: attachments,
         remote_image_urls: Vec::new(),
         mention_bindings: Vec::new(),
@@ -2133,6 +2138,7 @@ async fn submit_user_message_ignores_inaccessible_app_mentions_from_bindings() {
         local_images: Vec::new(),
         remote_image_urls: Vec::new(),
         text_elements: Vec::new(),
+        workflow_keyword: None,
         mention_bindings: vec![MentionBinding {
             sigil: '$',
             mention: "arabica-uae".to_string(),
@@ -2285,6 +2291,7 @@ async fn task_mention_submission_and_transcript_preserve_the_visible_title() {
                 ("Inspect ".len().."Inspect @".len() + title.len()).into(),
                 Some(format!("@{title}")),
             )],
+            workflow_keyword: None,
             mention_bindings: vec![MentionBinding {
                 sigil: '@',
                 mention: title.to_string(),
@@ -2489,6 +2496,7 @@ async fn image_submission_is_portable_for_new_turns_and_steers() {
             (0..placeholder.len()).into(),
             Some(placeholder.into()),
         )],
+        workflow_keyword: None,
         ..UserMessage::from("[Image #1] describe")
     };
     for running in [false, true] {

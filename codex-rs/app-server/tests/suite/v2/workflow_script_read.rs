@@ -41,7 +41,7 @@ async fn workflow_script_read_uses_idle_parent_sandbox_and_fresh_authority() -> 
 
     let mut server = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .build_initialized()
+        .build_initialized_with_timeout(std::time::Duration::from_secs(60))
         .await?;
     let thread = server
         .start_thread(ThreadStartParams {

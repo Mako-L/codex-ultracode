@@ -1,5 +1,6 @@
 use std::process::Output;
 use std::process::Stdio;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use codex_protocol::shell_environment::scrub_non_inheritable_env_vars;
@@ -91,6 +92,28 @@ async fn wait_for_git_command_with_timeout_output(
         }
         _ => None,
     }
+}
+
+pub fn git_program() -> String {
+    static GIT: OnceLock<String> = OnceLock::new();
+    GIT.get_or_init(resolve_git_program).clone()
+}
+
+fn resolve_git_program() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(output) = std::process::Command::new("xcrun")
+            .args(["--find", "git"])
+            .output()
+            && output.status.success()
+        {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+            if std::path::Path::new(&path).is_file() {
+                return path;
+            }
+        }
+    }
+    "git".to_string()
 }
 
 pub(crate) async fn run_git_command_with_timeout_output(

@@ -1,14 +1,18 @@
 //! Checkout authority belongs to one parent/run/worker/workspace, never the parent session.
 use super::*;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
+use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::PermissionsRequestApprovalParams;
 use codex_app_server_protocol::PermissionsRequestApprovalResponse;
 use codex_protocol::models::AdditionalPermissionProfile as CoreAdditionalPermissions;
 use codex_protocol::models::FileSystemPermissions;
+use codex_protocol::permissions::FileSystemSandboxPolicyContext;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
-use codex_sandboxing::policy_transforms::intersect_permission_profiles;
+use codex_sandboxing::policy_transforms::intersect_permission_profiles_with_context;
+use codex_utils_path_uri::LegacyAppPathString;
+use codex_utils_path_uri::PathUri;
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(super) struct CheckoutGrant {
@@ -27,6 +31,21 @@ impl CheckoutGrant {
             && self.workspace_id == id
             && self.path == workspace.cwd
     }
+}
+
+fn intersect_checkout_permissions(
+    requested: CoreAdditionalPermissions,
+    granted: CoreAdditionalPermissions,
+    cwd: &AbsolutePathBuf,
+) -> CoreAdditionalPermissions {
+    let cwd = PathUri::from_abs_path(cwd);
+    let context = FileSystemSandboxPolicyContext {
+        cwd: &cwd,
+        workspace_roots: std::slice::from_ref(&cwd),
+        user_home_dir: None,
+        temporary_directories: None,
+    };
+    intersect_permission_profiles_with_context(requested, granted, &context)
 }
 
 pub(super) fn write_scope(paths: Vec<AbsolutePathBuf>) -> CoreAdditionalPermissions {
@@ -72,7 +91,7 @@ pub(super) fn bounded_checkout_profile(
     approved: CoreAdditionalPermissions,
 ) -> Result<PermissionProfile, String> {
     let requested_grant = write_scope(vec![checkout.clone()]);
-    let grant = intersect_permission_profiles(requested_grant, approved, checkout.as_path());
+    let grant = intersect_checkout_permissions(requested_grant, approved, checkout);
     let authority = parent_profile
         .clone()
         .materialize_project_roots_with_workspace_roots(workspace_roots);
@@ -133,7 +152,7 @@ impl TurnRequestProcessor {
             .materialize_project_roots_with_workspace_roots(&current.workspace_roots)
             .file_system_sandbox_policy();
         let granted = if parent_policy
-            .can_write_path_with_cwd(checkout.as_path(), current.cwd().as_path())
+            .can_write_local_path_with_cwd(checkout.as_path(), current.cwd().as_path())
         {
             requested.clone()
         } else {
@@ -190,7 +209,7 @@ impl TurnRequestProcessor {
                                 item_id: workspace_id.to_string(),
                                 environment_id: None,
                                 started_at_ms: chrono::Utc::now().timestamp_millis(),
-                                cwd: current.cwd().clone(),
+                                cwd: LegacyAppPathString::from_abs_path(current.cwd()),
                                 reason: Some(reason),
                                 permissions: permissions.into(),
                             },
@@ -217,7 +236,7 @@ impl TurnRequestProcessor {
                     .map_err(|error| invalid_request(error.to_string()))?
             }
         };
-        let grant = intersect_permission_profiles(requested, granted, current.cwd().as_path());
+        let grant = intersect_checkout_permissions(requested, granted, current.cwd());
         if grant.file_system.as_ref().is_none_or(|permissions| {
             !permissions.entries.iter().any(|entry| {
                 entry.access == codex_protocol::permissions::FileSystemAccessMode::Write

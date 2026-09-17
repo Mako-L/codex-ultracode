@@ -41,7 +41,7 @@ fn disjoint_checkout_requires_scope_and_preserves_denials_network_and_temp_exclu
     assert!(
         !without_grant
             .file_system_sandbox_policy()
-            .can_write_path_with_cwd(checkout.join("result").as_path(), checkout.as_path())
+            .can_write_local_path_with_cwd(checkout.join("result").as_path(), checkout.as_path())
     );
     let mut returned = write_scope(vec![checkout.clone(), root.join("unrelated")]);
     returned.network = Some(codex_protocol::models::NetworkPermissions {
@@ -50,15 +50,15 @@ fn disjoint_checkout_requires_scope_and_preserves_denials_network_and_temp_exclu
     let bounded =
         bounded_checkout_profile(&authority, &profile, &[source], &checkout, returned).unwrap();
     let policy = bounded.file_system_sandbox_policy();
-    assert!(policy.can_write_path_with_cwd(checkout.join("result").as_path(), checkout.as_path()));
+    assert!(policy.can_write_local_path_with_cwd(checkout.join("result").as_path(), checkout.as_path()));
     assert!(
         !policy
-            .can_write_path_with_cwd(root.join("unrelated/result").as_path(), checkout.as_path())
+            .can_write_local_path_with_cwd(root.join("unrelated/result").as_path(), checkout.as_path())
     );
-    assert!(!policy.can_write_path_with_cwd(checkout.join("secret").as_path(), checkout.as_path()));
-    assert!(!policy.can_read_path_with_cwd(checkout.join("secret").as_path(), checkout.as_path()));
+    assert!(!policy.can_write_local_path_with_cwd(checkout.join("secret").as_path(), checkout.as_path()));
+    assert!(!policy.can_read_local_path_with_cwd(checkout.join("secret").as_path(), checkout.as_path()));
     assert!(
-        !policy.can_write_path_with_cwd(checkout.join(".git/config").as_path(), checkout.as_path())
+        !policy.can_write_local_path_with_cwd(checkout.join(".git/config").as_path(), checkout.as_path())
     );
     assert_eq!(
         bounded.network_sandbox_policy(),

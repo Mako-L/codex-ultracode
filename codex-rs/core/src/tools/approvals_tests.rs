@@ -124,6 +124,7 @@ async fn non_utf8_cwd_preserves_approval_routing(
     review_context.approvals_reviewer = reviewer;
     let context = ApprovalContext {
         review_context,
+        command_cancellation: None,
         cancellation_token: None,
         call_id: "non-utf8-cwd".to_string(),
         tool_name: ToolName::plain("exec_command"),

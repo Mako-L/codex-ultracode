@@ -302,6 +302,8 @@ fn manual_update_daemon(home: &TempDir) -> (Daemon, String) {
     (
         Daemon {
             socket_path: home.path().join("app-server-control/server.sock"),
+            backend_socket_path: None,
+            backend_codex_home: None,
             pid_file: state.join("app-server.pid"),
             update_pid_file: state.join("app-server-updater.pid"),
             operation_lock_file: state.join("daemon.lock"),

@@ -140,6 +140,7 @@ impl ChatWidget {
                     let cursor = main.cursor;
                     self.restore_composer_state(ThreadComposerState {
                         text: main.text,
+                        workflow_keyword: main.workflow_keyword,
                         text_elements: main.text_elements,
                         local_images: main.local_images,
                         remote_image_urls: main.remote_image_urls,

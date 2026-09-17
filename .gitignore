@@ -35,6 +35,7 @@ CLAUDE.md
 AGENTS.override.md
 
 # caches
+.native-test-target/
 .release-cache/
 .cache/
 .turbo/

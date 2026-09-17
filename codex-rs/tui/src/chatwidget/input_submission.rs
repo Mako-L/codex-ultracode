@@ -257,6 +257,7 @@ impl ChatWidget {
             self.prepare_image_submission(
                 UserMessage {
                     text,
+                    workflow_keyword,
                     local_images,
                     remote_image_urls,
                     text_elements,
@@ -441,7 +442,7 @@ impl ChatWidget {
         });
         let service_tier = self.service_tier_update_for_core();
         let active_permission_profile = self.config.permissions.active_permission_profile();
-        let op = AppCommand::user_turn(
+        let mut op = AppCommand::user_turn(
             client_user_message_id.clone(),
             items,
             self.config.cwd.to_path_buf(),
@@ -608,6 +609,7 @@ impl ChatWidget {
         // Preserve the user's composed payload so they can retry after changing models.
         self.restore_user_message_to_composer(UserMessage {
             text,
+            workflow_keyword: None,
             text_elements,
             local_images,
             mention_bindings,

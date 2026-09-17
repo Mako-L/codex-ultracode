@@ -22,7 +22,7 @@ pub(super) async fn fork_source(
         config.http_client_factory(),
     )
     .await?;
-    let client = InProcessAppServerClient::start(InProcessClientStartArgs {
+    let client = AppServerClient::InProcess(InProcessAppServerClient::start(InProcessClientStartArgs {
         arg0_paths: arg0_paths.clone(),
         config: std::sync::Arc::new(config.clone()),
         cli_overrides: cli_overrides.to_vec(),
@@ -46,7 +46,7 @@ pub(super) async fn fork_source(
         opt_out_notification_methods: Vec::new(),
         channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
     })
-    .await?;
+    .await?);
     let result = async {
         let lookup = crate::cli::ResumeArgs {
             session_id: Some(args.session_id.clone()),

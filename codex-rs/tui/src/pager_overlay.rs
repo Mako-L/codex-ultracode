@@ -100,7 +100,7 @@ impl Overlay {
             Overlay::Transcript(o) => o.is_done(),
             Overlay::Static(o) => o.is_done(),
             Overlay::Workflow(o) => o.is_done(),
-            Overlay::Analytics(o) => o.is_done(),
+            Overlay::Analytics(o) => o.is_done,
         }
     }
 }
