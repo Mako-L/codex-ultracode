@@ -1,6 +1,6 @@
 <p align="center"><strong>Codex Ultracode</strong> is a Codex CLI fork with a native workflow engine: two-pane phases and workers, <code>/workflows</code>, pause, resume, restart, and save.</p>
 <p align="center">
-  <img src=".github/workflow-running.svg" alt="A native workflow running in Codex Ultracode" width="90%" />
+  <img src=".github/workflow-running.svg" alt="The Codex Ultracode workflows panel with phases and workers" width="90%" />
 </p>
 
 This tree is based on current `openai/codex` main (`872fc22`, 2026-09-15), past `rust-v0.155.0-alpha.8`, plus the native workflow engine. It is not official OpenAI Codex. Use [GitHub Releases](https://github.com/Mako-L/codex-ultracode/releases) from this repo. Do not install `@openai/codex` or the ChatGPT installer if you want this fork.
