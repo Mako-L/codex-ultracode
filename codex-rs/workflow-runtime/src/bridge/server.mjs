@@ -40,6 +40,10 @@ export function createBridgeServer({cwd=process.cwd(),stateDir=path.join(cwd,'.u
     const options={runId,resume,restart,source:params.source,model:params.model,effort:params.effort,cwd,stateDir,client:adapter,nativeWorkspace,authorityRef,authorityDigest,signal:controller.signal,onUpdate:state=>{job.state=state;acknowledge(state);notify(state);}};
     if(Object.hasOwn(params,'args'))options.args=params.args;
     if(Object.hasOwn(params,'concurrency'))options.concurrency=params.concurrency;
+    if(Object.hasOwn(params,'isolateWrites')) {
+      if(typeof params.isolateWrites!=='boolean')throw fail('isolateWrites must be boolean');
+      options.isolateWrites=params.isolateWrites;
+    }
     job.promise=Promise.resolve().then(()=>runtime(options)).then(state=>{job.state=state;acknowledge(state);return state;},error=>{job.state={...job.state,status:'failed',error:error.message};rejectStarted(error);return job.state;});
     return started;
   };

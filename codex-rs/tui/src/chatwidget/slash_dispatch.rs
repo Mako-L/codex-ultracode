@@ -1050,13 +1050,16 @@ impl ChatWidget {
                     }));
             }
             SlashCommand::Config if !trimmed.is_empty() => {
-                match parse_workflow_size_config(trimmed) {
-                    Some(guideline) => self
-                        .app_event_tx
-                        .send(AppEvent::PersistWorkflowSizeGuideline { guideline }),
-                    None => self.add_error_message(
-                        "Expected workflowSizeGuideline=unrestricted|small|medium|large".into(),
-                    ),
+                if let Some(isolate_writes) = parse_workflow_isolate_writes(trimmed) {
+                    self.app_event_tx
+                        .send(AppEvent::PersistWorkflowIsolateWrites { isolate_writes });
+                } else if let Some(guideline) = parse_workflow_size_config(trimmed) {
+                    self.app_event_tx
+                        .send(AppEvent::PersistWorkflowSizeGuideline { guideline });
+                } else {
+                    self.add_error_message(
+                        "Expected isolateWrites=true|false or workflowSizeGuideline=unrestricted|small|medium|large".into(),
+                    );
                 }
             }
             _ => self.dispatch_command(cmd),
@@ -1363,6 +1366,14 @@ impl ChatWidget {
     }
 }
 
+fn parse_workflow_isolate_writes(value: &str) -> Option<bool> {
+    match value {
+        "isolateWrites=true" | "workflowIsolateWrites=true" => Some(true),
+        "isolateWrites=false" | "workflowIsolateWrites=false" => Some(false),
+        _ => None,
+    }
+}
+
 fn parse_workflow_size_config(
     value: &str,
 ) -> Option<codex_protocol::config_types::WorkflowSizeGuideline> {
@@ -1378,6 +1389,7 @@ fn parse_workflow_size_config(
 
 #[cfg(test)]
 mod workflow_size_config_tests {
+    use super::parse_workflow_isolate_writes;
     use super::parse_workflow_size_config;
     use codex_protocol::config_types::WorkflowSizeGuideline::*;
 
@@ -1395,5 +1407,8 @@ mod workflow_size_config_tests {
             parse_workflow_size_config("workflowSizeGuideline=huge"),
             None
         );
+        assert_eq!(parse_workflow_isolate_writes("isolateWrites=false"), Some(false));
+        assert_eq!(parse_workflow_isolate_writes("isolateWrites=true"), Some(true));
+        assert_eq!(parse_workflow_isolate_writes("isolateWrites=off"), None);
     }
 }

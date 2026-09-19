@@ -33,4 +33,4 @@ ultracode: boolean | null, /**
 ultracode_keyword_trigger: boolean | null, /**
  * Disables all workflow entry points when true.
  */
-disable_workflows: boolean | null, workflow_size_guideline: WorkflowSizeGuideline | null, model_reasoning_summary: ReasoningSummary | null, model_verbosity: Verbosity | null, service_tier: string | null, analytics: AnalyticsConfig | null, browser_use: BrowserUseConfig | null, computer_use: ComputerUseConfig | null, desktop: { [key in string]?: JsonValue } | null} & ({ [key in string]?: number | string | boolean | Array<JsonValue> | { [key in string]?: JsonValue } | null });
+disable_workflows: boolean | null, workflow_size_guideline: WorkflowSizeGuideline | null, workflow_isolate_writes: boolean | null, model_reasoning_summary: ReasoningSummary | null, model_verbosity: Verbosity | null, service_tier: string | null, analytics: AnalyticsConfig | null, browser_use: BrowserUseConfig | null, computer_use: ComputerUseConfig | null, desktop: { [key in string]?: JsonValue } | null} & ({ [key in string]?: number | string | boolean | Array<JsonValue> | { [key in string]?: JsonValue } | null });

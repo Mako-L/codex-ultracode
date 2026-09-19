@@ -20,3 +20,14 @@ fn workflow_concurrency_accepts_only_bounded_integers() {
     }
     assert!(validate_arguments(&json!({"script":"return 1;"})).is_ok());
 }
+
+#[test]
+fn workflow_isolate_writes_accepts_only_booleans() {
+    assert!(validate_arguments(&json!({"script":"return 1;","isolateWrites":false})).is_ok());
+    assert!(validate_arguments(&json!({"script":"return 1;","isolateWrites":true})).is_ok());
+    assert!(validate_arguments(&json!({"script":"return 1;","isolateWrites":"false"})).is_err());
+    let merged = super::with_isolate_writes(&json!({"script":"return 1;"}), false);
+    assert_eq!(merged["isolateWrites"], json!(false));
+    let kept = super::with_isolate_writes(&json!({"script":"return 1;","isolateWrites":true}), false);
+    assert_eq!(kept["isolateWrites"], json!(true));
+}

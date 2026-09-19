@@ -5515,6 +5515,9 @@
               "type": "null"
             }
           ]
+        },
+        "workflow_isolate_writes": {
+          "type": ["boolean", "null"]
         }
       },
       "type": "object"

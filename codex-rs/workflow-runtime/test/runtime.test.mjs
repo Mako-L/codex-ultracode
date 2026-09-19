@@ -198,6 +198,30 @@ test('ordinary workers inherit parent cwd and workspace-write sandbox', async ()
   assert.equal(run.workers.some(worker=>worker.worktree),false);
   assert.deepEqual(run.result,['ok','visible']);
 });
+test('parent can disable write isolation so edit workers use the same folder', async () => {
+  const f=await fixture();
+  execFileSync('git',['init'],{cwd:f.cwd});execFileSync('git',['config','user.name','Test'],{cwd:f.cwd});execFileSync('git',['config','user.email','test@example.invalid'],{cwd:f.cwd});
+  await writeFile(path.join(f.cwd,'base.txt'),'base\n');execFileSync('git',['add','.'],{cwd:f.cwd});execFileSync('git',['commit','-m','base'],{cwd:f.cwd});
+  let seen;
+  f.client.run=async options=>{seen=options;await writeFile(path.join(options.cwd,'same-folder.txt'),'here');return {output:'ok'};};
+  const run=await runtime.runWorkflow({...f,isolateWrites:false,permission:{sandbox:'workspace-write',approvalPolicy:'never'},source:source('return await agent("edit",{write:true});')});
+  assert.equal(run.status,'completed',run.error);
+  assert.equal(seen.cwd,f.cwd);
+  assert.equal(run.workers[0].isolation,null);
+  assert.equal(run.workers.some(worker=>worker.worktree),false);
+  assert.equal(await readFile(path.join(f.cwd,'same-folder.txt'),'utf8'),'here');
+});
+test('write worker can opt out of isolation with isolation none', async () => {
+  const f=await fixture();
+  execFileSync('git',['init'],{cwd:f.cwd});execFileSync('git',['config','user.name','Test'],{cwd:f.cwd});execFileSync('git',['config','user.email','test@example.invalid'],{cwd:f.cwd});
+  await writeFile(path.join(f.cwd,'base.txt'),'base\n');execFileSync('git',['add','.'],{cwd:f.cwd});execFileSync('git',['commit','-m','base'],{cwd:f.cwd});
+  let seen;
+  f.client.run=async options=>{seen=options;return {output:'ok'};};
+  const run=await runtime.runWorkflow({...f,permission:{sandbox:'workspace-write',approvalPolicy:'never'},source:source('return await agent("edit",{write:true,isolation:"none"});')});
+  assert.equal(run.status,'completed',run.error);
+  assert.equal(seen.cwd,f.cwd);
+  assert.equal(run.workers[0].isolation,null);
+});
 test('worktree isolation is opt-in and cannot widen read-only parent', async () => {
   const f=await fixture();
   execFileSync('git',['init'],{cwd:f.cwd});execFileSync('git',['config','user.name','Test'],{cwd:f.cwd});execFileSync('git',['config','user.email','test@example.invalid'],{cwd:f.cwd});
@@ -963,6 +987,126 @@ test('stale ownership takeover is serialized by recovery mutex', async () => {
   await writeFile(path.join(directory,'owner.json'),JSON.stringify({pid:999999,token:'old'}));
   await writeFile(path.join(directory,'owner.json.recovery'),'held');
   assert.throws(()=>store.acquireRun(f.stateDir,id),/recovery already in progress/i);
+});
+test('remaining land conflicts start a merge worker in the project folder', async () => {
+  const f=await fixture();
+  execFileSync('git',['init'],{cwd:f.cwd});execFileSync('git',['config','user.name','Test'],{cwd:f.cwd});execFileSync('git',['config','user.email','test@example.invalid'],{cwd:f.cwd});
+  await writeFile(path.join(f.cwd,'value.txt'),'before\n');execFileSync('git',['add','.'],{cwd:f.cwd});execFileSync('git',['commit','-m','base'],{cwd:f.cwd});
+  f.client.run=async options=>{
+    if(String(options.prompt).startsWith('Resolve the remaining merge conflicts')) {
+      assert.equal(options.cwd,f.cwd);
+      await writeFile(path.join(f.cwd,'value.txt'),'resolved\n');
+      return {output:'merged'};
+    }
+    await writeFile(path.join(options.cwd,'value.txt'),'theirs\n');
+    return {output:'ok'};
+  };
+  await writeFile(path.join(f.cwd,'value.txt'),'mine\n');
+  const run=await runtime.runWorkflow({...f,permission:{sandbox:'workspace-write',approvalPolicy:'never'},source:source('return await agent("edit",{write:true});')});
+  assert.equal(run.status,'completed',run.error);
+  assert.equal(run.land.status,'merged');
+  assert.equal(run.workers.at(-1).label,'Merge');
+  assert.equal(await readFile(path.join(f.cwd,'value.txt'),'utf8'),'resolved\n');
+});
+test('failed write workers do not land isolated edits', async () => {
+  const f=await fixture();
+  execFileSync('git',['init'],{cwd:f.cwd});execFileSync('git',['config','user.name','Test'],{cwd:f.cwd});execFileSync('git',['config','user.email','test@example.invalid'],{cwd:f.cwd});
+  await writeFile(path.join(f.cwd,'value.txt'),'before\n');execFileSync('git',['add','.'],{cwd:f.cwd});execFileSync('git',['commit','-m','base'],{cwd:f.cwd});
+  f.client.run=async options=>{
+    await writeFile(path.join(options.cwd,'value.txt'),'after\n');
+    throw new Error('provider unavailable');
+  };
+  const run=await runtime.runWorkflow({...f,permission:{sandbox:'workspace-write',approvalPolicy:'never'},source:source('return await agent("edit",{write:true});')});
+  assert.equal(run.status,'completed',run.error);
+  assert.equal(run.result,null);
+  assert.equal(run.land.status,'empty');
+  assert.equal(await readFile(path.join(f.cwd,'value.txt'),'utf8'),'before\n');
+});
+test('same-folder write workers skip land because the files are already there', async () => {
+  const f=await fixture();
+  execFileSync('git',['init'],{cwd:f.cwd});execFileSync('git',['config','user.name','Test'],{cwd:f.cwd});execFileSync('git',['config','user.email','test@example.invalid'],{cwd:f.cwd});
+  await writeFile(path.join(f.cwd,'value.txt'),'before\n');execFileSync('git',['add','.'],{cwd:f.cwd});execFileSync('git',['commit','-m','base'],{cwd:f.cwd});
+  f.client.run=async options=>{
+    await writeFile(path.join(options.cwd,'same.txt'),'here\n');
+    return {output:'ok'};
+  };
+  const run=await runtime.runWorkflow({...f,permission:{sandbox:'workspace-write',approvalPolicy:'never'},source:source('return await agent("edit",{write:true,isolation:"none"});')});
+  assert.equal(run.status,'completed',run.error);
+  assert.equal(run.workers[0].worktree,undefined);
+  assert.equal(run.land.status,'empty');
+  assert.equal(await readFile(path.join(f.cwd,'same.txt'),'utf8'),'here\n');
+});
+test('runtime auto-merges clean overlaps without a merge worker', async () => {
+  const f=await fixture();
+  execFileSync('git',['init'],{cwd:f.cwd});execFileSync('git',['config','user.name','Test'],{cwd:f.cwd});execFileSync('git',['config','user.email','test@example.invalid'],{cwd:f.cwd});
+  await writeFile(path.join(f.cwd,'value.txt'),'keep\nshared\nend\n');execFileSync('git',['add','.'],{cwd:f.cwd});execFileSync('git',['commit','-m','base'],{cwd:f.cwd});
+  f.client.run=async options=>{
+    await writeFile(path.join(options.cwd,'value.txt'),'keep\nshared\nworker\n');
+    return {output:'ok'};
+  };
+  await writeFile(path.join(f.cwd,'value.txt'),'parent\nshared\nend\n');
+  const run=await runtime.runWorkflow({...f,permission:{sandbox:'workspace-write',approvalPolicy:'never'},source:source('return await agent("edit",{write:true});')});
+  assert.equal(run.status,'completed',run.error);
+  assert.equal(run.land.status,'landed',run.land.error);
+  assert.equal(run.workers.some(worker=>worker.label==='Merge'),false);
+  assert.equal(await readFile(path.join(f.cwd,'value.txt'),'utf8'),'parent\nshared\nworker\n');
+});
+test('failed merge workers leave the parent conflict file untouched', async () => {
+  const f=await fixture();
+  execFileSync('git',['init'],{cwd:f.cwd});execFileSync('git',['config','user.name','Test'],{cwd:f.cwd});execFileSync('git',['config','user.email','test@example.invalid'],{cwd:f.cwd});
+  await writeFile(path.join(f.cwd,'value.txt'),'before\n');execFileSync('git',['add','.'],{cwd:f.cwd});execFileSync('git',['commit','-m','base'],{cwd:f.cwd});
+  f.client.run=async options=>{
+    if(String(options.prompt).startsWith('Resolve the remaining merge conflicts'))throw new Error('merge failed');
+    await writeFile(path.join(options.cwd,'value.txt'),'theirs\n');
+    return {output:'ok'};
+  };
+  await writeFile(path.join(f.cwd,'value.txt'),'mine\n');
+  const run=await runtime.runWorkflow({...f,permission:{sandbox:'workspace-write',approvalPolicy:'never'},source:source('return await agent("edit",{write:true});')});
+  assert.equal(run.status,'completed',run.error);
+  assert.equal(run.land.status,'conflicted');
+  assert.equal(run.land.merge.status,'failed');
+  assert.equal(await readFile(path.join(f.cwd,'value.txt'),'utf8'),'mine\n');
+});
+test('resume after a merge does not launch a second merge worker', async () => {
+  const f=await fixture();
+  execFileSync('git',['init'],{cwd:f.cwd});execFileSync('git',['config','user.name','Test'],{cwd:f.cwd});execFileSync('git',['config','user.email','test@example.invalid'],{cwd:f.cwd});
+  await writeFile(path.join(f.cwd,'value.txt'),'before\n');execFileSync('git',['add','.'],{cwd:f.cwd});execFileSync('git',['commit','-m','base'],{cwd:f.cwd});
+  let merges=0;
+  f.client.run=async options=>{
+    if(String(options.prompt).startsWith('Resolve the remaining merge conflicts')) {
+      merges++;
+      await writeFile(path.join(f.cwd,'value.txt'),'resolved\n');
+      return {output:'merged'};
+    }
+    await writeFile(path.join(options.cwd,'value.txt'),'theirs\n');
+    return {output:'ok'};
+  };
+  await writeFile(path.join(f.cwd,'value.txt'),'mine\n');
+  const first=await runtime.runWorkflow({...f,permission:{sandbox:'workspace-write',approvalPolicy:'never'},source:source('return await agent("edit",{write:true});')});
+  assert.equal(first.land.status,'merged');
+  const resumed=await runtime.runWorkflow({...f,runId:first.id,resume:true});
+  assert.equal(resumed.status,'completed',resumed.error);
+  assert.equal(merges,1);
+  assert.equal(resumed.land.status,'empty');
+  assert.equal(await readFile(path.join(f.cwd,'value.txt'),'utf8'),'resolved\n');
+});
+test('completed write workers land isolated edits in the main folder', async () => {
+  const f=await fixture();
+  execFileSync('git',['init'],{cwd:f.cwd});execFileSync('git',['config','user.name','Test'],{cwd:f.cwd});execFileSync('git',['config','user.email','test@example.invalid'],{cwd:f.cwd});
+  await writeFile(path.join(f.cwd,'value.txt'),'before\n');execFileSync('git',['add','.'],{cwd:f.cwd});execFileSync('git',['commit','-m','base'],{cwd:f.cwd});
+  f.client.run=async options=>{
+    await mkdir(path.join(options.cwd,'src'),{recursive:true});
+    await writeFile(path.join(options.cwd,'src','add.js'),'export const add=(a,b)=>a+b;\n');
+    await writeFile(path.join(options.cwd,'value.txt'),'after\n');
+    return {output:'ok'};
+  };
+  const run=await runtime.runWorkflow({...f,permission:{sandbox:'workspace-write',approvalPolicy:'never'},source:source('return await agent("edit",{write:true});')});
+  assert.equal(run.status,'completed',run.error);
+  assert.ok(run.workers[0].worktree);
+  assert.notEqual(run.workers[0].worktree,f.cwd);
+  assert.equal(run.land.status,'landed',run.land.error);
+  assert.equal(await readFile(path.join(f.cwd,'value.txt'),'utf8'),'after\n');
+  assert.equal(await readFile(path.join(f.cwd,'src','add.js'),'utf8'),'export const add=(a,b)=>a+b;\n');
 });
 test('save refuses symlink destinations and traversal', async () => {
   const f=await fixture();

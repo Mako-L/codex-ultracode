@@ -421,6 +421,10 @@ impl App {
                         ));
                     }
                 }
+                let arguments = crate::workflow_launch::with_isolate_writes(
+                    &arguments,
+                    self.config.workflow_isolate_writes,
+                );
                 let launch = crate::workflow_launch::launch_with_preview(
                     &app_server.request_handle(),
                     &key,
@@ -614,12 +618,16 @@ impl App {
                         .unwrap()
                         .bridge
                         .clone();
+                    let arguments = crate::workflow_launch::with_isolate_writes(
+                        &params.arguments,
+                        self.config.workflow_isolate_writes,
+                    );
                     let launch = crate::workflow_launch::launch_with_preview(
                         &app_server.request_handle(),
                         &session_key,
                         &authority,
                         &bridge,
-                        &params.arguments,
+                        &arguments,
                         preview.as_ref(),
                     )
                     .await?;

@@ -19,6 +19,16 @@ pub(crate) struct WorkflowLaunch {
     pub source_digest: Option<String>,
 }
 
+pub(crate) fn with_isolate_writes(arguments: &Value, default: bool) -> Value {
+    let mut value = arguments.clone();
+    if let Some(object) = value.as_object_mut() {
+        object
+            .entry("isolateWrites")
+            .or_insert(serde_json::json!(default));
+    }
+    value
+}
+
 pub(crate) fn validate_arguments(arguments: &Value) -> Result<(), BridgeError> {
     let object = arguments
         .as_object()
@@ -34,6 +44,7 @@ pub(crate) fn validate_arguments(arguments: &Value) -> Result<(), BridgeError> {
                 | "title"
                 | "description"
                 | "concurrency"
+                | "isolateWrites"
         ) {
             return Err(BridgeError::host(format!(
                 "Unknown workflow argument {key}. This tool launches or resumes workflows; completion arrives automatically."
@@ -47,6 +58,12 @@ pub(crate) fn validate_arguments(arguments: &Value) -> Result<(), BridgeError> {
                 return Err(BridgeError::host(
                     "Workflow concurrency must be an integer from 1 to 16",
                 ));
+            }
+            continue;
+        }
+        if key == "isolateWrites" {
+            if !value.is_boolean() {
+                return Err(BridgeError::host("Workflow isolateWrites must be a boolean"));
             }
             continue;
         }
@@ -139,6 +156,9 @@ pub(crate) async fn launch_with_preview(
     }
     if let Some(concurrency) = arguments.get("concurrency") {
         params["concurrency"] = concurrency.clone();
+    }
+    if let Some(isolate_writes) = arguments.get("isolateWrites") {
+        params["isolateWrites"] = isolate_writes.clone();
     }
     let mut source_digest = None;
     if method == "runSaved" {

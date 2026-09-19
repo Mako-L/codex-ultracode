@@ -11,43 +11,74 @@ impl ChatWidget {
 
         let configured = self.config.workflow_size_guideline;
         let effective = configured.unwrap_or(WorkflowSizeGuideline::Medium);
-        let items = [
-            (
-                WorkflowSizeGuideline::Unrestricted,
-                "unrestricted",
-                "No agent-count guideline",
-            ),
-            (
-                WorkflowSizeGuideline::Small,
-                "small (aim for <5 agents)",
-                "Advisory only",
-            ),
-            (
-                WorkflowSizeGuideline::Medium,
-                workflow_size_label(WorkflowSizeGuideline::Medium, configured.is_none()),
-                "Advisory only",
-            ),
-            (
-                WorkflowSizeGuideline::Large,
-                "large (aim for <50 agents)",
-                "Advisory only",
-            ),
-        ]
-        .into_iter()
-        .map(|(guideline, name, description)| SelectionItem {
-            name: name.to_string(),
-            description: Some(description.to_string()),
-            is_current: guideline == effective,
-            actions: vec![Box::new(move |tx| {
-                tx.send(AppEvent::PersistWorkflowSizeGuideline { guideline });
-            })],
-            dismiss_on_select: true,
-            ..Default::default()
-        })
-        .collect();
+        let isolate_writes = self.config.workflow_isolate_writes;
+        let mut items = vec![
+            SelectionItem {
+                name: "Isolated worktrees".to_string(),
+                description: Some("Write agents get their own checkout".to_string()),
+                is_current: isolate_writes,
+                actions: vec![Box::new(|tx| {
+                    tx.send(AppEvent::PersistWorkflowIsolateWrites {
+                        isolate_writes: true,
+                    });
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "This folder".to_string(),
+                description: Some("Write agents edit the current project".to_string()),
+                is_current: !isolate_writes,
+                actions: vec![Box::new(|tx| {
+                    tx.send(AppEvent::PersistWorkflowIsolateWrites {
+                        isolate_writes: false,
+                    });
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+        items.extend(
+            [
+                (
+                    WorkflowSizeGuideline::Unrestricted,
+                    "unrestricted",
+                    "No agent-count guideline",
+                ),
+                (
+                    WorkflowSizeGuideline::Small,
+                    "small (aim for <5 agents)",
+                    "Advisory only",
+                ),
+                (
+                    WorkflowSizeGuideline::Medium,
+                    workflow_size_label(WorkflowSizeGuideline::Medium, configured.is_none()),
+                    "Advisory only",
+                ),
+                (
+                    WorkflowSizeGuideline::Large,
+                    "large (aim for <50 agents)",
+                    "Advisory only",
+                ),
+            ]
+            .into_iter()
+            .map(|(guideline, name, description)| SelectionItem {
+                name: name.to_string(),
+                description: Some(description.to_string()),
+                is_current: guideline == effective,
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::PersistWorkflowSizeGuideline { guideline });
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            }),
+        );
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Dynamic workflow size".to_string()),
-            subtitle: Some("Choose the advisory size for newly authored workflows.".to_string()),
+            title: Some("Dynamic workflows".to_string()),
+            subtitle: Some(
+                "Choose write location and the advisory size for newly authored workflows."
+                    .to_string(),
+            ),
             items,
             footer_hint: Some(standard_popup_hint_line()),
             ..Default::default()

@@ -391,6 +391,7 @@ pub struct ConfigToml {
     pub disable_workflows: Option<bool>,
     /// Advisory target for the number of agents in dynamically authored workflows.
     pub workflow_size_guideline: Option<WorkflowSizeGuideline>,
+    pub workflow_isolate_writes: Option<bool>,
     /// Starting reference for isolated workflow worktrees; defaults to fresh origin HEAD.
     pub worktree: Option<WorkflowWorktreeToml>,
     pub plan_mode_reasoning_effort: Option<ReasoningEffort>,
@@ -1046,6 +1047,8 @@ mod tests {
             Some(WorkflowSizeGuideline::Small)
         );
         assert!(toml::from_str::<ConfigToml>("workflow_size_guideline = 'huge'").is_err());
+        let isolation: ConfigToml = toml::from_str("workflow_isolate_writes = false").unwrap();
+        assert_eq!(isolation.workflow_isolate_writes, Some(false));
     }
 
     #[test]

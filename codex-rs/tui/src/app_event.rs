@@ -1158,6 +1158,10 @@ pub(crate) enum AppEvent {
         guideline: codex_protocol::config_types::WorkflowSizeGuideline,
     },
 
+    PersistWorkflowIsolateWrites {
+        isolate_writes: bool,
+    },
+
     /// Persist the selected service tier to the appropriate config.
     PersistServiceTierSelection {
         service_tier: Option<String>,

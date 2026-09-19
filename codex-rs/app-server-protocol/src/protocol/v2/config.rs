@@ -307,6 +307,7 @@ pub struct Config {
     /// Disables all workflow entry points when true.
     pub disable_workflows: Option<bool>,
     pub workflow_size_guideline: Option<WorkflowSizeGuideline>,
+    pub workflow_isolate_writes: Option<bool>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,
     pub service_tier: Option<String>,
@@ -1160,7 +1161,8 @@ mod ultracode_tests {
             "ultracode": true,
             "ultracode_keyword_trigger": false,
             "disable_workflows": true
-            ,"workflow_size_guideline": "large"
+            ,"workflow_size_guideline": "large",
+            "workflow_isolate_writes": false
         }))
         .unwrap();
 
@@ -1171,6 +1173,7 @@ mod ultracode_tests {
             config.workflow_size_guideline,
             Some(WorkflowSizeGuideline::Large)
         );
+        assert_eq!(config.workflow_isolate_writes, Some(false));
         assert!(!config.additional.contains_key("ultracode"));
     }
 }

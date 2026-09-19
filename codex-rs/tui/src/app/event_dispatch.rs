@@ -2280,6 +2280,31 @@ impl App {
                     )),
                 }
             }
+            AppEvent::PersistWorkflowIsolateWrites { isolate_writes } => {
+                self.config.workflow_isolate_writes = isolate_writes;
+                self.chat_widget.set_workflow_isolate_writes(isolate_writes);
+                match crate::config_update::write_config_batch(
+                    app_server.request_handle(),
+                    vec![crate::config_update::replace_config_value(
+                        "workflow_isolate_writes",
+                        serde_json::json!(isolate_writes),
+                    )],
+                )
+                .await
+                {
+                    Ok(_) => self.chat_widget.add_info_message(
+                        if isolate_writes {
+                            "Workflow write agents use isolated worktrees".into()
+                        } else {
+                            "Workflow write agents edit this folder".into()
+                        },
+                        None,
+                    ),
+                    Err(err) => self.chat_widget.add_error_message(format!(
+                        "Failed to save workflow write location: {err}"
+                    )),
+                }
+            }
             AppEvent::PersistServiceTierSelection { service_tier } => {
                 self.refresh_status_line();
                 self.config.service_tier = service_tier.clone();

@@ -6,7 +6,8 @@ import { availableParallelism } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import Ajv from 'ajv';
 import { executeScript, parseScript } from './script.mjs';
-import { acquireRun, consumeControl, digest, readRun, runDirectory, writeRun, writeRunScript } from './store.mjs';
+import { acquireRun, consumeControl, atomicJSON, digest, readRun, runDirectory, writeRun, writeRunScript } from './store.mjs';
+import { landWorktrees, mergePrompt, recordResolutions } from './land.mjs';
 import {createPrefixStagger,prefixStaggerDelay} from './prefix-stagger.mjs';
 import {requestApproval} from './approvals.mjs';
 
@@ -95,7 +96,9 @@ export async function runWorkflow(options) {
     if(pendingRecovery.size&&!authorityMatches)throw new Error('Recovery blocked: unresolved worker termination requires the original authority');
     let replay=!options.restart&&authorityMatches;
     let replayDecision=Promise.resolve();
-    state={version:1,id,name:meta.name,description:meta.description,source,sourceDigest:digest(source),args:Object.hasOwn(options,'args')?options.args:old?.args,cwd,permission,...(options.authorityDigest?{authorityDigest:options.authorityDigest}:{}),model:options.model??old?.model,effort:options.effort??old?.effort??(options.nativeWorkspace?null:'medium'),concurrency,status:'running',createdAt:old?.createdAt??now(),startedAt:now(),updatedAt:now(),phases:(meta.phases??[]).map(phase=>typeof phase==='string'?{name:phase}:{name:phase.title,...(phase.detail!==undefined?{detail:phase.detail}:{}),...(phase.model!==undefined?{model:phase.model}:{})}),workers:[],logs:[],launchCount:old?.launchCount??prior.filter(worker=>worker.startedAt&&!worker.cached).length,attempt:(old?.attempt??0)+1,history:old?[...(old.history??[]),{attempt:old.attempt,status:old.status,workers:old.workers,result:old.result,scriptPath:old.scriptPath}]:[]};
+    const isolateWrites=options.isolateWrites??old?.isolateWrites??true;
+    if(typeof isolateWrites!=='boolean')throw new Error('isolateWrites must be boolean');
+    state={version:1,id,name:meta.name,description:meta.description,source,sourceDigest:digest(source),args:Object.hasOwn(options,'args')?options.args:old?.args,cwd,permission,isolateWrites,...(options.authorityDigest?{authorityDigest:options.authorityDigest}:{}),model:options.model??old?.model,effort:options.effort??old?.effort??(options.nativeWorkspace?null:'medium'),concurrency,status:'running',createdAt:old?.createdAt??now(),startedAt:now(),updatedAt:now(),phases:(meta.phases??[]).map(phase=>typeof phase==='string'?{name:phase}:{name:phase.title,...(phase.detail!==undefined?{detail:phase.detail}:{}),...(phase.model!==undefined?{model:phase.model}:{})}),workers:[],logs:[],launchCount:old?.launchCount??prior.filter(worker=>worker.startedAt&&!worker.cached).length,attempt:(old?.attempt??0)+1,history:old?[...(old.history??[]),{attempt:old.attempt,status:old.status,workers:old.workers,result:old.result,scriptPath:old.scriptPath}]:[]};
     if(!state.model&&!options.nativeWorkspace)throw new Error('An explicit Codex catalog model is required');
     if(pendingRecovery.size)state.uncertainWorkers=true;
     state.scriptPath=writeRunScript(stateDir,id,source);
@@ -160,7 +163,7 @@ export async function runWorkflow(options) {
       if(typeof prompt!=='string'||!prompt.trim()||prompt.length>200_000)throw new Error('Invalid agent prompt');
       if(!workerOptions||typeof workerOptions!=='object'||Array.isArray(workerOptions))throw new Error('Invalid agent options');
       for(const key of Object.keys(workerOptions))if(!allowedOptions.has(key))throw new Error(`Unsupported worker option: ${key}`);
-      if(workerOptions.isolation!==undefined&&workerOptions.isolation!=='worktree')throw new Error(`Unsupported worker isolation: ${workerOptions.isolation}`);
+      if(workerOptions.isolation!==undefined&&workerOptions.isolation!=='worktree'&&workerOptions.isolation!=='none')throw new Error(`Unsupported worker isolation: ${workerOptions.isolation}`);
       if(workerOptions.agentType!==undefined&&(typeof workerOptions.agentType!=='string'||!workerOptions.agentType.trim()||workerOptions.agentType.length>200))throw new Error(`Invalid agent type: ${workerOptions.agentType}`);
       const agentType=workerOptions.agentType?.trim()??'general-purpose';
       if(!options.nativeWorkspace&&!resolveRoles&&!builtInAgentTypes.has(agentType))throw new Error(`Unsupported agent type: ${agentType}`);
@@ -180,8 +183,7 @@ export async function runWorkflow(options) {
       let effort=workerOptions.effort??state.effort;
       const readOnly=workerOptions.write===false||agentType==='Explore'||agentType==='Plan';
       const sandbox=readOnly?'read-only':permission.sandbox;
-      // Deprecated compatibility alias: write:true retains isolated-edit behavior.
-      const isolated=workerOptions.isolation==='worktree'||workerOptions.write===true;
+      const isolated=workerOptions.isolation==='worktree'||(workerOptions.write===true&&workerOptions.isolation!=='none'&&state.isolateWrites);
       const hasExtendedContract=['phase','agentType','isolation'].some(key=>Object.hasOwn(workerOptions,key));
       const index=state.workers.length;
       const workerId=`worker-${index+1}`;
@@ -390,6 +392,19 @@ export async function runWorkflow(options) {
     }
     state.uncertainWorkers=pendingRecovery.size>0;
     if(state.uncertainWorkers)state.status='interrupted';
+    if(state.status==='completed') {
+      const evidenceDir=path.join(runDirectory(stateDir,id),'conflicts');
+      let land=landWorktrees({cwd,workers:state.workers,evidenceDir,resolved:old?.land?.resolutions});
+      if(land.status==='conflicted'&&permission.sandbox!=='read-only') {
+        await call('phase',{name:'Merge'});
+        const output=await call('agent',{prompt:mergePrompt(land,evidenceDir),options:{label:'Merge',write:true,isolation:'none'}});
+        land={...land,merge:{output,status:output==null?'failed':'completed'},resolutions:[...land.resolutions??[],...recordResolutions(cwd,land.conflicts)]};
+        if(land.merge.status==='completed')land.status='merged';
+      }
+      state.land=land;
+      atomicJSON(path.join(runDirectory(stateDir,id),'land-report.json'),land);
+      if(land.status==='failed'){state.status='failed';state.error=land.error;}
+    }
     state.endedAt=now();save();
     options.signal?.removeEventListener('abort',abort);
   } finally {

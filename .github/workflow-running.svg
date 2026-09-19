@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900" role="img" aria-label="A native workflow running in Codex Ultracode">
+  <rect width="1440" height="900" fill="#d9e2ef"/>
+  <rect x="80" y="48" width="1280" height="804" rx="16" fill="#1c1c1c"/>
+  <rect x="80" y="48" width="1280" height="44" rx="16" fill="#2a2a2a"/>
+  <rect x="80" y="76" width="1280" height="16" fill="#2a2a2a"/>
+  <circle cx="108" cy="70" r="7" fill="#ff5f57"/>
+  <circle cx="132" cy="70" r="7" fill="#febc2e"/>
+  <circle cx="156" cy="70" r="7" fill="#28c840"/>
+  <text x="720" y="75" text-anchor="middle" fill="#cfcfcf" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15">codex · workflows</text>
+  <line x1="80" y1="108" x2="1360" y2="108" stroke="#5b8def" stroke-width="2"/>
+  <text x="112" y="148" fill="#f4f4f4" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="20">fix-fixture</text>
+  <text x="112" y="176" fill="#bdbdbd" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15">Fix three source files in parallel, then independently test and review the fixture.  3/4 agents · 40s · running</text>
+  <line x1="500" y1="200" x2="500" y2="800" stroke="#3a3a3a"/>
+  <text x="112" y="230" fill="#9ad07a" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16">▸ Fix src/add.mjs</text>
+  <text x="132" y="262" fill="#8f8f8f" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15">✓ Fix src/multiply.mjs</text>
+  <text x="132" y="294" fill="#8f8f8f" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15">✓ Fix src/greet.mjs</text>
+  <text x="532" y="230" fill="#f4f4f4" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16">✓ Completed · gpt-5.6-luna</text>
+  <text x="532" y="258" fill="#8f8f8f" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15">14.3k tok · 6 tool calls · 23s</text>
+  <text x="532" y="302" fill="#d0d0d0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15">Prompt · 15 lines · expand</text>
+  <text x="532" y="328" fill="#9a9a9a" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15">Work directly in the project folder. Fix src/add.mjs.</text>
+  <text x="532" y="372" fill="#d0d0d0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15">Activity · last 3 of 6 tool calls</text>
+  <text x="532" y="398" fill="#9a9a9a" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15">apply_patch(src/add.mjs)</text>
+  <text x="532" y="422" fill="#9a9a9a" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15">exec(/bin/zsh -lc 'node --test project.test.mjs')</text>
+  <text x="532" y="446" fill="#9a9a9a" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15">exec(/bin/zsh -lc 'git diff -- src/add.mjs')</text>
+  <text x="532" y="490" fill="#d0d0d0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15">Outcome</text>
+  <text x="532" y="516" fill="#c8c8c8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15">Fixed src/add.mjs: add(a, b) now returns a + b.</text>
+  <text x="532" y="548" fill="#c8c8c8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15">Verification: node --test project.test.mjs passed addition and</text>
+  <text x="532" y="572" fill="#c8c8c8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15">multiplication. Greeting still returns Hello Ada instead of Hello, Ada.</text>
+  <text x="112" y="828" fill="#8f8f8f" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14">1 agent · p pause · esc back · s save</text>
+</svg>

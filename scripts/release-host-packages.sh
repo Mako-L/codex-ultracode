@@ -3,8 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CACHE="$ROOT/.release-cache"
-TAG="${1:-v0.155.0-workflow.1}"
-VERSION="0.155.0-workflow.1"
+TAG="${1:-v0.155.0-workflow.2}"
+VERSION="0.155.0-workflow.2"
 NODE_VER="24.14.0"
 DIST="$ROOT/dist"
 

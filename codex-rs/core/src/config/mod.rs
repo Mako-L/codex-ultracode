@@ -975,6 +975,7 @@ pub struct Config {
     pub disable_workflows: bool,
     /// `None` preserves the visible distinction between the medium default and an explicit choice.
     pub workflow_size_guideline: Option<WorkflowSizeGuideline>,
+    pub workflow_isolate_writes: bool,
     pub worktree_base_ref: WorktreeBaseRef,
     /// Optional Plan-mode-specific reasoning effort override used by the TUI.
     ///
@@ -4312,6 +4313,7 @@ impl Config {
                 || std::env::var_os("ULTRACODE_DISABLE_WORKFLOWS").as_deref()
                     == Some(std::ffi::OsStr::new("1")),
             workflow_size_guideline: cfg.workflow_size_guideline,
+            workflow_isolate_writes: cfg.workflow_isolate_writes.unwrap_or(true),
             worktree_base_ref: cfg.worktree.as_ref().map(|worktree| worktree.base_ref).unwrap_or_default(),
             plan_mode_reasoning_effort: cfg.plan_mode_reasoning_effort,
             model_reasoning_summary: cfg.model_reasoning_summary,

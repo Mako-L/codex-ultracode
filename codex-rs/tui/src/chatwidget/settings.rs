@@ -16,6 +16,10 @@ impl ChatWidget {
         self.config.workflow_size_guideline = Some(guideline);
     }
 
+    pub(crate) fn set_workflow_isolate_writes(&mut self, isolate_writes: bool) {
+        self.config.workflow_isolate_writes = isolate_writes;
+    }
+
     pub(crate) fn set_workflow_commands(
         &mut self,
         commands: Vec<crate::bottom_pane::slash_commands::WorkflowCommand>,

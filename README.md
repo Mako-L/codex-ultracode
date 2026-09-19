@@ -1,9 +1,11 @@
 <p align="center"><strong>Codex Ultracode</strong> is a Codex CLI fork with a native workflow engine: two-pane phases and workers, <code>/workflows</code>, pause, resume, restart, and save.</p>
 <p align="center">
-  <img src=".github/workflow-running.png" alt="A native workflow running in Codex Ultracode" width="90%" />
+  <img src=".github/workflow-running.svg" alt="A native workflow running in Codex Ultracode" width="90%" />
 </p>
 
 This tree is based on current `openai/codex` main (`872fc22`, 2026-09-15), past `rust-v0.155.0-alpha.8`, plus the native workflow engine. It is not official OpenAI Codex. Use [GitHub Releases](https://github.com/Mako-L/codex-ultracode/releases) from this repo. Do not install `@openai/codex` or the ChatGPT installer if you want this fork.
+
+Current package version: `0.155.0-workflow.2`.
 
 ## Install
 
@@ -45,6 +47,8 @@ Ask for a workflow, or type `/workflows`. From an empty composer, Down selects t
 
 Sign in with ChatGPT or an API key the same way as upstream Codex.
 
+Write workers default to isolated Git worktrees. When a run completes, those edits land in the project folder you opened. Clean overlaps merge automatically. Remaining conflicts start a Merge worker in that same folder instead of overwriting your files. `/config` can switch write workers to the current folder for the whole run.
+
 ## Build from source
 
 ```shell
@@ -65,7 +69,7 @@ Linux packages are built on this Mac with OrbStack, not GitHub-hosted runners:
 
 ```shell
 export CODEX_REPO_ROOT="$PWD"
-bash scripts/release-host-packages.sh v0.155.0-workflow.1
+bash scripts/release-host-packages.sh v0.155.0-workflow.2
 ```
 
 See [Installing & building](./docs/install.md) for the Rust toolchain.
